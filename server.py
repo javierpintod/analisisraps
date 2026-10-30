@@ -9,9 +9,9 @@ import mimetypes
 import os
 import sys
 import urllib.parse
-import webbrowser
 
-from sena_processor import SenaAnalyzer, SenaReader, auto_detect_columns
+
+from sena_processor import SenaAnalyzer
 from export_utils import create_excel_report
 from sample_data import generate_sample_excel
 
@@ -28,7 +28,7 @@ SESSION_DATA = {
 
 
 class SenaApiHandler(BaseHTTPRequestHandler):
-    
+
     def log_message(self, format, *args):
         # Silenciar logs ruidosos en consola
         sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args))
@@ -72,7 +72,7 @@ class SenaApiHandler(BaseHTTPRequestHandler):
             sample_path = os.path.join(BASE_DIR, "data", "muestra_sena_juicios_evaluativos.xlsx")
             if not os.path.exists(sample_path):
                 generate_sample_excel(sample_path)
-            
+
             with open(sample_path, "rb") as f:
                 content = f.read()
 
@@ -203,11 +203,11 @@ def start_server(port=PORT):
     server_address = ("", port)
     httpd = HTTPServer(server_address, SenaApiHandler)
     url = f"http://{HOST}:{port}"
-    print(f"\n=======================================================")
-    print(f"  SENA - SISTEMA DE ANÁLISIS DE AVANCE POR RAPS")
-    print(f"=======================================================")
+    print("\n=======================================================")
+    print("  SENA - SISTEMA DE ANÁLISIS DE AVANCE POR RAPS")
+    print("=======================================================")
     print(f"  Aplicación iniciada en: {url}")
-    print(f"  Presiona Ctrl+C para detener el servidor.\n")
+    print("  Presiona Ctrl+C para detener el servidor.\n")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

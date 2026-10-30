@@ -6,7 +6,7 @@ Programa: TECNÓLOGO EN ANÁLISIS Y DESARROLLO DE SOFTWARE (ADSO) - Ficha 271458
 import os
 import random
 import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.styles import Font, PatternFill, Alignment
 
 NOMBRES = [
     "ALEJANDRO", "CAROLINA", "DANIEL", "VALENTINA", "MATEO",
@@ -60,6 +60,7 @@ COMPETENCIAS_RAPS = [
         ]
     }
 ]
+
 
 def generate_sample_excel(output_path: str = "data/muestra_sena_juicios_evaluativos.xlsx"):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -120,11 +121,11 @@ def generate_sample_excel(output_path: str = "data/muestra_sena_juicios_evaluati
     for comp_idx, comp_data in enumerate(COMPETENCIAS_RAPS):
         comp_name = comp_data["competencia"]
         instructor = "ING. CARLOS ARTURO LONDOÑO" if comp_idx < 2 else ("LIC. ADRIANA VALENCIA" if comp_idx == 2 else "LIC. JOHN FREDY OSPINA")
-        
+
         for rap_idx, rap_name in enumerate(comp_data["raps"]):
             is_early_rap = comp_idx == 0 or (comp_idx == 1 and rap_idx == 0) or (comp_idx == 2 and rap_idx == 0)
             is_mid_rap = (comp_idx == 1 and rap_idx == 1) or (comp_idx == 3 and rap_idx == 0)
-            
+
             for doc, nom, estado, perfil in aprendices:
                 if estado in ["CANCELADO", "RETIRO VOLUNTARIO"]:
                     juicio = "A" if (is_early_rap and rap_idx == 0 and random.random() > 0.5) else "POR EVALUAR"
@@ -171,6 +172,7 @@ def generate_sample_excel(output_path: str = "data/muestra_sena_juicios_evaluati
 
     wb.save(output_path)
     return output_path
+
 
 if __name__ == "__main__":
     p = generate_sample_excel()

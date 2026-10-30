@@ -6,10 +6,10 @@ Garantiza máxima compatibilidad, velocidad e independencia de extensiones binar
 
 from collections import defaultdict
 import csv
-from dataclasses import dataclass, field, asdict
+
 import io
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import openpyxl
 
 
@@ -85,22 +85,22 @@ def normalize_juicio(val: Any) -> str:
     s = str(val).strip().upper()
     if not s or s in ["NAN", "NONE", "NULL", "-", "--", "N/A", "00/00/0000"]:
         return "P"
-    
+
     if s == "A" or s.startswith("APROB") or s == "1" or s in ["SI", "SÍ", "APROBADO"]:
         return "A"
-    
+
     if s == "D" or s.startswith("DEFIC") or s.startswith("NO APROB") or s == "0" or s in ["NO", "DEFICIENTE"]:
         return "D"
-    
+
     if any(k in s for k in ["POR EVALUAR", "PENDIENTE", "SIN JUICIO", "SIN EVALUAR", "NO EVALUADO"]):
         return "P"
-    
+
     return "P"
 
 
 class SenaReader:
     """Lee archivos .xlsx y .csv en una lista de diccionarios limpios."""
-    
+
     @staticmethod
     def read_file(file_bytes: bytes, filename: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         lower_name = filename.lower()
@@ -116,7 +116,7 @@ class SenaReader:
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
             return [], []
-        
+
         # Buscar la fila de encabezados (a veces SofíaPlus agrega filas de título arriba)
         header_row_idx = 0
         for idx, row in enumerate(rows[:10]):
@@ -135,7 +135,7 @@ class SenaReader:
             for i, h in enumerate(headers):
                 row_dict[h] = r[i] if i < len(r) else None
             data_rows.append(row_dict)
-            
+
         return headers, data_rows
 
     @staticmethod
@@ -249,9 +249,12 @@ class SenaAnalyzer:
 
         if not col_doc or not col_rap or not col_juicio:
             faltantes = []
-            if not col_doc: faltantes.append("Documento Aprendiz")
-            if not col_rap: faltantes.append("Resultado de Aprendizaje (RAP)")
-            if not col_juicio: faltantes.append("Juicio Evaluativo")
+            if not col_doc:
+                faltantes.append("Documento Aprendiz")
+            if not col_rap:
+                faltantes.append("Resultado de Aprendizaje (RAP)")
+            if not col_juicio:
+                faltantes.append("Juicio Evaluativo")
             raise ValueError(f"Faltan columnas indispensables: {', '.join(faltantes)}. Por favor defina el mapeo manual.")
 
         col_aprendiz = mapping.get("aprendiz")
@@ -272,7 +275,7 @@ class SenaAnalyzer:
         # y metadatos del RAP: rap -> {competencia, instructor}
         aprendiz_meta: Dict[str, Dict[str, str]] = {}
         rap_meta: Dict[str, Dict[str, str]] = {}
-        
+
         # Primero una pasada para conocer todos los aprendices y estados
         for row in self.raw_data:
             doc_raw = row.get(col_doc)
@@ -288,11 +291,13 @@ class SenaAnalyzer:
 
             if col_ficha:
                 f = str(row.get(col_ficha) or "").strip()
-                if f: fichas_encontradas.add(f)
+                if f:
+                    fichas_encontradas.add(f)
 
             if col_prog:
                 p = str(row.get(col_prog) or "").strip()
-                if p: programas_encontrados.add(p)
+                if p:
+                    programas_encontrados.add(p)
 
         # Filtro de aprendices por estado seleccionado
         filter_set = set([str(x).strip().upper() for x in filter_estados]) if filter_estados else None
@@ -521,7 +526,7 @@ class SenaAnalyzer:
         total_por_evaluar = total_evaluaciones_posibles - total_aprobados - total_deficientes
 
         pct_avance_real = round((total_aprobados / total_evaluaciones_posibles) * 100, 2) if total_evaluaciones_posibles > 0 else 0.0
-        
+
         evaluaciones_emitidas = total_aprobados + total_deficientes
         pct_aprob_evaluados = round((total_aprobados / evaluaciones_emitidas) * 100, 2) if evaluaciones_emitidas > 0 else 0.0
         pct_cobertura = round((evaluaciones_emitidas / total_evaluaciones_posibles) * 100, 2) if total_evaluaciones_posibles > 0 else 0.0

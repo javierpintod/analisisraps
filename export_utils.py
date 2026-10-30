@@ -13,7 +13,7 @@ from openpyxl.utils import get_column_letter
 
 def create_excel_report(analysis: Dict[str, Any]) -> bytes:
     wb = openpyxl.Workbook()
-    
+
     # -------------------------------------------------------------
     # PESTAÑA 1: RESUMEN EJECUTIVO
     # -------------------------------------------------------------
@@ -24,9 +24,7 @@ def create_excel_report(analysis: Dict[str, Any]) -> bytes:
     # Paleta SENA
     sena_green = "39A900"
     sena_dark = "00324D"
-    card_bg = "F4F9F4"
     alert_red = "FF4D4D"
-    alert_yellow = "FFB020"
 
     title_font = Font(name="Segoe UI", size=16, bold=True, color="FFFFFF")
     subtitle_font = Font(name="Segoe UI", size=10, italic=True, color="FFFFFF")
@@ -81,7 +79,7 @@ def create_excel_report(analysis: Dict[str, Any]) -> bytes:
         c_val = ws_resumen.cell(row=row_offset, column=idx * 2 + 1, value=val)
         c_val.font = kpi_num_font
         c_val.alignment = Alignment(horizontal="center", vertical="center")
-        
+
         c_lbl = ws_resumen.cell(row=row_offset + 1, column=idx * 2 + 1, value=label)
         c_lbl.font = kpi_label_font
         c_lbl.alignment = Alignment(horizontal="center", vertical="center")
@@ -92,7 +90,7 @@ def create_excel_report(analysis: Dict[str, Any]) -> bytes:
         c_val = ws_resumen.cell(row=row_offset, column=idx * 2 + 1, value=val)
         c_val.font = Font(name="Segoe UI", size=20, bold=True, color=alert_red if "CRÍTICO" in label or "RIESGO" in label else sena_green)
         c_val.alignment = Alignment(horizontal="center", vertical="center")
-        
+
         c_lbl = ws_resumen.cell(row=row_offset + 1, column=idx * 2 + 1, value=label)
         c_lbl.font = kpi_label_font
         c_lbl.alignment = Alignment(horizontal="center", vertical="center")
@@ -118,7 +116,7 @@ def create_excel_report(analysis: Dict[str, Any]) -> bytes:
     # -------------------------------------------------------------
     ws_raps = wb.create_sheet(title="Semáforo de RAPs")
     ws_raps.views.sheetView[0].showGridLines = True
-    
+
     headers_raps = [
         "Competencia", "Resultado de Aprendizaje (RAP)", "Instructor",
         "Aprobados", "Deficientes", "Por Evaluar", "% Avance Real", "Estado"
@@ -150,7 +148,7 @@ def create_excel_report(analysis: Dict[str, Any]) -> bytes:
         ]
         ws_raps.append(row_data)
         curr_row = ws_raps.max_row
-        
+
         # Color según estado
         row_fill = fill_green if rap["categoria_cod"] == "optimo" else (fill_yellow if rap["categoria_cod"] == "en_avance" else fill_red)
         for col_idx in range(1, len(headers_raps) + 1):
