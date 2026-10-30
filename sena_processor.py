@@ -107,15 +107,106 @@ def normalize_juicio(val: Any) -> str:
 
 
 class SenaReader:
-    """Lee archivos .xlsx y .csv en una lista de diccionarios limpios."""
+    """Lee archivos .xlsx, .xls (BIFF8 de SofiaPlus) y .csv en una lista de diccionarios limpios."""
     
     @staticmethod
     def read_file(file_bytes: bytes, filename: str) -> Tuple[List[str], List[Dict[str, Any]]]:
         lower_name = filename.lower()
-        if lower_name.endswith((".xlsx", ".xlsm")):
+        # Verificar si es Excel 97-2003 (.xls) por extensión o por firma OLE2 (D0 CF 11 E0)
+        is_ole_xls = file_bytes.startswith(b'\xd0\xcf\x11\xe0') or lower_name.endswith('.xls')
+        
+        if is_ole_xls:
+            return SenaReader._read_xls(file_bytes)
+        elif lower_name.endswith((".xlsx", ".xlsm")):
             return SenaReader._read_excel(file_bytes)
         else:
             return SenaReader._read_csv(file_bytes)
+
+    @staticmethod
+    def _read_xls(file_bytes: bytes) -> Tuple[List[str], List[Dict[str, Any]]]:
+        import xlrd
+        book = xlrd.open_workbook(file_contents=file_bytes)
+        sheet = book.sheet_by_index(0)
+        if sheet.nrows == 0:
+            return [], []
+
+        # Extraer metadatos superiores típicos de SofiaPlus
+        metadata = {}
+        header_row_idx = 0
+        for idx in range(min(30, sheet.nrows)):
+            row = [str(sheet.cell_value(idx, col)).strip() for col in range(sheet.ncols)]
+            first_cell = clean_string(row[0]) if row else ""
+            
+            # Ficha de Caracterización
+            if "ficha de caracterizac" in first_cell and "estado" not in first_cell:
+                # Buscar valor no vacío en la fila
+                for cell_val in row[1:]:
+                    if cell_val:
+                        val_str = str(cell_val).replace(".0", "").strip()
+                        if val_str:
+                            metadata["ficha"] = val_str
+                            break
+            # Denominación del Programa
+            elif "denominaci" in first_cell or "programa" in first_cell:
+                for cell_val in row[1:]:
+                    if cell_val:
+                        metadata["programa"] = str(cell_val).strip()
+                        break
+            elif "regional" in first_cell:
+                for cell_val in row[1:]:
+                    if cell_val: metadata["regional"] = str(cell_val).strip(); break
+            elif "centro" in first_cell:
+                for cell_val in row[1:]:
+                    if cell_val: metadata["centro"] = str(cell_val).strip(); break
+
+            # Buscar fila de encabezados
+            clean_cells = [clean_string(c) for c in row if c]
+            if any("documento" in c for c in clean_cells) and any("resultado" in c or "competencia" in c or "juicio" in c for c in clean_cells):
+                header_row_idx = idx
+                break
+
+        headers_raw = [str(sheet.cell_value(header_row_idx, c)).strip() for c in range(sheet.ncols)]
+        headers = [h if h else f"Columna_{i+1}" for i, h in enumerate(headers_raw)]
+        
+        # Agregar columnas calculadas si no existen
+        if "Nombre Aprendiz" not in headers:
+            headers.append("Nombre Aprendiz")
+        if metadata.get("ficha") and "Número Ficha" not in headers:
+            headers.append("Número Ficha")
+        if metadata.get("programa") and "Programa de Formación" not in headers:
+            headers.append("Programa de Formación")
+
+        data_rows = []
+        for r_idx in range(header_row_idx + 1, sheet.nrows):
+            # Saltar filas vacías
+            row_raw = [sheet.cell_value(r_idx, c) for c in range(sheet.ncols)]
+            if not any(str(x).strip() for x in row_raw if x is not None):
+                continue
+            
+            row_dict = {}
+            for col_i, h in enumerate(headers_raw):
+                col_name = headers[col_i]
+                val = row_raw[col_i] if col_i < len(row_raw) else None
+                # Si el valor numérico termina en .0 (como documentos o fichas), limpiarlo
+                if isinstance(val, float) and val.is_integer():
+                    val = str(int(val))
+                row_dict[col_name] = val
+
+            # Si vienen 'Nombre' y 'Apellidos' por separado (estándar en SofiaPlus)
+            nom = str(row_dict.get("Nombre") or "").strip()
+            ape = str(row_dict.get("Apellidos") or "").strip()
+            if nom or ape:
+                row_dict["Nombre Aprendiz"] = f"{nom} {ape}".strip()
+
+            # Asignar metadatos de ficha y programa si no estaban en las columnas
+            if metadata.get("ficha"):
+                row_dict["Número Ficha"] = metadata["ficha"]
+            if metadata.get("programa"):
+                row_dict["Programa de Formación"] = metadata["programa"]
+
+            data_rows.append(row_dict)
+
+        return headers, data_rows
 
     @staticmethod
     def _read_excel(file_bytes: bytes) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -125,26 +216,58 @@ class SenaReader:
         if not rows:
             return [], []
         
-        # Buscar la fila de encabezados (a veces SofíaPlus agrega filas de título arriba)
+        # Buscar la fila de encabezados
         header_row_idx = 0
-        for idx, row in enumerate(rows[:10]):
+        metadata = {}
+        for idx, row in enumerate(rows[:25]):
+            if not row: continue
+            first_cell = clean_string(row[0]) if row[0] is not None else ""
+            if "ficha de caracterizac" in first_cell and "estado" not in first_cell:
+                for cell_val in row[1:]:
+                    if cell_val:
+                        metadata["ficha"] = str(cell_val).replace(".0", "").strip()
+                        break
+            elif "denominaci" in first_cell or "programa" in first_cell:
+                for cell_val in row[1:]:
+                    if cell_val:
+                        metadata["programa"] = str(cell_val).strip()
+                        break
+
             clean_cells = [clean_string(c) for c in row if c is not None]
-            # Si contiene palabras clave de Sofía como 'documento' o 'aprendiz' o 'rap' o 'competencia'
-            if any("documento" in c or "aprendiz" in c or "resultado" in c or "competencia" in c or "ficha" in c for c in clean_cells):
+            if any("documento" in c for c in clean_cells) and any("resultado" in c or "competencia" in c or "juicio" in c for c in clean_cells):
                 header_row_idx = idx
                 break
 
         headers = [str(c).strip() if c is not None else f"Columna_{i+1}" for i, c in enumerate(rows[header_row_idx])]
+        if "Nombre Aprendiz" not in headers: headers.append("Nombre Aprendiz")
+        if metadata.get("ficha") and "Número Ficha" not in headers: headers.append("Número Ficha")
+        if metadata.get("programa") and "Programa de Formación" not in headers: headers.append("Programa de Formación")
+
         data_rows = []
         for r in rows[header_row_idx + 1:]:
             if not any(r):
                 continue
             row_dict = {}
-            for i, h in enumerate(headers):
-                row_dict[h] = r[i] if i < len(r) else None
+            for i, h in enumerate(headers[:len(r)]):
+                val = r[i]
+                if isinstance(val, float) and val.is_integer():
+                    val = str(int(val))
+                row_dict[h] = val
+
+            nom = str(row_dict.get("Nombre") or "").strip()
+            ape = str(row_dict.get("Apellidos") or "").strip()
+            if nom or ape:
+                row_dict["Nombre Aprendiz"] = f"{nom} {ape}".strip()
+
+            if metadata.get("ficha"):
+                row_dict["Número Ficha"] = metadata["ficha"]
+            if metadata.get("programa"):
+                row_dict["Programa de Formación"] = metadata["programa"]
+
             data_rows.append(row_dict)
             
         return headers, data_rows
+
 
     @staticmethod
     def _read_csv(file_bytes: bytes) -> Tuple[List[str], List[Dict[str, Any]]]:
@@ -194,23 +317,60 @@ class SenaReader:
 
 
 def auto_detect_columns(headers: List[str]) -> Dict[str, Optional[str]]:
-    """Mapea automáticamente los encabezados a los campos requeridos del SENA."""
+    """Mapea automáticamente los encabezados a los campos requeridos del SENA con alta precisión."""
     mapping: Dict[str, Optional[str]] = {}
     normalized_headers = {h: clean_string(h) for h in headers}
 
+    # 1. Primer pase: Coincidencia exacta
     for key, synonyms in COLUMN_SYNONYMS.items():
         matched = None
         for syn in synonyms:
             clean_syn = clean_string(syn)
             for orig_h, norm_h in normalized_headers.items():
-                if clean_syn == norm_h or clean_syn in norm_h:
+                if clean_syn == norm_h:
+                    matched = orig_h
+                    break
+            if matched:
+                break
+        if matched:
+            mapping[key] = matched
+
+    # 2. Segundo pase: Coincidencia por contención con filtros estrictos anti-colisión
+    for key, synonyms in COLUMN_SYNONYMS.items():
+        if mapping.get(key):
+            continue
+        matched = None
+        for syn in synonyms:
+            clean_syn = clean_string(syn)
+            for orig_h, norm_h in normalized_headers.items():
+                # Evitar colisiones conocidas en reportes de SofiaPlus
+                if key == "documento" and "tipo" in norm_h:
+                    continue  # Saltar 'Tipo de Documento' para asignar el 'Número de Documento'
+                if key == "aprendiz" and any(x in norm_h for x in ["resultado", "competencia", "estado", "fecha"]):
+                    continue  # Evitar que 'Resultado de Aprendizaje' sea tomado como el aprendiz
+                if key == "juicio" and any(x in norm_h for x in ["fecha", "hora", "funcionario", "instructor"]):
+                    continue  # Evitar que 'Fecha y Hora del Juicio' o funcionario sea tomado como juicio
+                if key == "fecha_juicio" and any(x in norm_h for x in ["funcionario", "instructor"]):
+                    continue
+                if key == "rap" and any(x in norm_h for x in ["funcionario", "instructor"]):
+                    continue
+
+                if clean_syn in norm_h:
                     matched = orig_h
                     break
             if matched:
                 break
         mapping[key] = matched
 
+    # Verificación final para 'documento': si quedó asignado a 'Tipo de Documento', reasignar
+    if mapping.get("documento") and "tipo" in clean_string(mapping["documento"]):
+        for orig_h, norm_h in normalized_headers.items():
+            if "numero" in norm_h and "documento" in norm_h:
+                mapping["documento"] = orig_h
+                break
+
     return mapping
+
 
 
 class SenaAnalyzer:

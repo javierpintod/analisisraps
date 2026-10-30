@@ -27,23 +27,28 @@ SESSION_DATA = {
 }
 
 def preload_default_sample():
-    """Precarga el archivo de prueba para que la aplicación inicie con datos listos."""
+    """Precarga el archivo de reporte real de juicios para que la aplicación inicie con los datos de SofiaPlus."""
     try:
+        # Priorizar el archivo real de descargas
+        real_path = os.path.join(BASE_DIR, "data", "Reporte_de_Juicios_Evaluativos.xls")
         sample_path = os.path.join(BASE_DIR, "data", "muestra_sena_juicios_evaluativos.xlsx")
-        if not os.path.exists(sample_path):
-            generate_sample_excel(sample_path)
-        with open(sample_path, "rb") as f:
+        
+        target_path = real_path if os.path.exists(real_path) else sample_path
+        target_name = os.path.basename(target_path)
+        
+        with open(target_path, "rb") as f:
             content = f.read()
         SESSION_DATA["file_bytes"] = content
-        SESSION_DATA["filename"] = "muestra_sena_juicios_evaluativos.xlsx"
-        analyzer = SenaAnalyzer(content, SESSION_DATA["filename"])
-        SESSION_DATA["last_analysis"] = analyzer.run_analysis(filter_estados=["EN FORMACIÓN"])
-        print("  -> Archivo de prueba SENA precargado exitosamente en memoria.")
+        SESSION_DATA["filename"] = target_name
+        analyzer = SenaAnalyzer(content, target_name)
+        SESSION_DATA["last_analysis"] = analyzer.run_analysis(filter_estados=["EN FORMACION"])
+        print(f"  -> Archivo real SENA '{target_name}' precargado exitosamente en memoria.")
     except Exception as e:
         print(f"  [Aviso] No se pudo precargar la muestra: {e}")
 
 # Ejecutar precarga al importar/iniciar
 preload_default_sample()
+
 
 
 
@@ -88,30 +93,38 @@ class SenaApiHandler(BaseHTTPRequestHandler):
             return
 
         elif path == "/api/sample":
-            # Cargar archivo de muestra generado
+            real_path = os.path.join(BASE_DIR, "data", "Reporte_de_Juicios_Evaluativos.xls")
             sample_path = os.path.join(BASE_DIR, "data", "muestra_sena_juicios_evaluativos.xlsx")
-            if not os.path.exists(sample_path):
+            target_path = real_path if os.path.exists(real_path) else sample_path
+            target_name = os.path.basename(target_path)
+
+            if not os.path.exists(target_path):
                 generate_sample_excel(sample_path)
+                target_path = sample_path
+                target_name = "muestra_sena_juicios_evaluativos.xlsx"
             
-            with open(sample_path, "rb") as f:
+            with open(target_path, "rb") as f:
                 content = f.read()
 
             SESSION_DATA["file_bytes"] = content
-            SESSION_DATA["filename"] = "muestra_sena_juicios_evaluativos.xlsx"
+            SESSION_DATA["filename"] = target_name
 
-            analyzer = SenaAnalyzer(content, SESSION_DATA["filename"])
-            analysis = analyzer.run_analysis(filter_estados=["EN FORMACIÓN"])
+            analyzer = SenaAnalyzer(content, target_name)
+            states = analyzer.get_unique_states()
+            initial_filters = [s for s in states if "FORMACI" in s] or None
+            analysis = analyzer.run_analysis(filter_estados=initial_filters)
             SESSION_DATA["last_analysis"] = analysis
 
             self._send_json(200, {
                 "success": True,
-                "filename": SESSION_DATA["filename"],
+                "filename": target_name,
                 "columns": analyzer.get_available_columns(),
                 "mapping": analyzer.get_detected_columns(),
-                "states": analyzer.get_unique_states(),
+                "states": states,
                 "analysis": analysis
             })
             return
+
 
         elif path == "/api/export":
             if not SESSION_DATA["last_analysis"]:

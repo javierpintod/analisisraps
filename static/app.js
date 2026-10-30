@@ -150,12 +150,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 throw new Error(data.error || "No se pudo cargar el archivo demo");
             }
 
-            fileNameText.textContent = "muestra_sena_juicios_evaluativos.xlsx (Ficha 2714589)";
+            fileNameText.textContent = `${data.filename} (Ficha ${data.analysis.meta.ficha})`;
             fileInfo.style.display = "inline-flex";
 
             setupStateChips(data.states);
             renderDashboard(data.analysis);
-            if (showNotification) showToast("Archivo de prueba cargado con éxito");
+            if (showNotification) showToast("Reporte cargado con éxito");
+
         } catch (err) {
             console.error(err);
             if (showNotification) showToast(err.message, true);
