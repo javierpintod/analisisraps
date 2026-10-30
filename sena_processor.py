@@ -1,0 +1,574 @@
+"""
+Motor de Procesamiento y Análisis de Juicios Evaluativos SENA.
+Desarrollado en Python puro con soporte para Excel (.xlsx) y CSV.
+Garantiza máxima compatibilidad, velocidad e independencia de extensiones binarias.
+"""
+
+from collections import defaultdict
+import csv
+from dataclasses import dataclass, field, asdict
+import io
+import re
+from typing import Any, Dict, List, Optional, Set, Tuple
+import openpyxl
+
+
+COLUMN_SYNONYMS = {
+    "ficha": [
+        "ficha", "numero_ficha", "número de ficha", "numero de ficha", "codigo_ficha",
+        "código de ficha", "ficha de caracterizacion", "ficha de caracterización", "grupo"
+    ],
+    "programa": [
+        "programa", "nombre_programa", "programa de formación", "programa de formacion",
+        "denominacion", "denominación de programa"
+    ],
+    "documento": [
+        "documento", "numero_documento", "número de documento", "identificacion",
+        "identificación", "doc", "numero_doc", "cedula", "cédula", "no. documento"
+    ],
+    "aprendiz": [
+        "aprendiz", "nombre_aprendiz", "nombre aprendiz", "nombres y apellidos",
+        "nombre completo", "aprendices", "nombre del aprendiz", "nombres", "estudiante"
+    ],
+    "estado_aprendiz": [
+        "estado_aprendiz", "estado aprendiz", "estado del aprendiz", "estado",
+        "estado matricula", "estado de matrícula", "estado matricula aprendiz"
+    ],
+    "competencia": [
+        "competencia", "nombre_competencia", "código competencia", "codigo competencia",
+        "descripcion competencia", "descripción competencia", "nombre de competencia"
+    ],
+    "rap": [
+        "resultado_aprendizaje", "resultado de aprendizaje", "rap", "nombre_rap",
+        "descripción rap", "descripcion rap", "resultado", "nombre resultado de aprendizaje"
+    ],
+    "juicio": [
+        "juicio_evaluativo", "juicio evaluativo", "juicio", "estado juicio",
+        "estado_juicio", "calificacion", "calificación", "estado de evaluacion", "evaluacion",
+        "juicio de evaluacion", "resultado evaluacion"
+    ],
+    "fecha_juicio": [
+        "fecha_juicio", "fecha juicio", "fecha evaluacion", "fecha_evaluacion",
+        "fecha de evaluacion", "fecha de juicio", "fecha"
+    ],
+    "instructor": [
+        "instructor", "nombre_instructor", "evaluador", "instructor asignado",
+        "docente", "funcionario"
+    ]
+}
+
+
+def clean_string(val: Any) -> str:
+    """Limpia cadenas eliminando tildes y caracteres especiales para matching."""
+    if val is None:
+        return ""
+    s = str(val).strip().lower()
+    replacements = {
+        'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ú': 'u', 'ü': 'u', 'ñ': 'n'
+    }
+    for orig, repl in replacements.items():
+        s = s.replace(orig, repl)
+    s = re.sub(r'[^a-z0-9_\s]', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def normalize_juicio(val: Any) -> str:
+    """
+    Normaliza el juicio evaluativo:
+    - 'A' : Aprobado
+    - 'D' : Deficiente / No Aprobado
+    - 'P' : Por evaluar / Pendiente / Sin registrar
+    """
+    if val is None:
+        return "P"
+    s = str(val).strip().upper()
+    if not s or s in ["NAN", "NONE", "NULL", "-", "--", "N/A", "00/00/0000"]:
+        return "P"
+    
+    if s == "A" or s.startswith("APROB") or s == "1" or s in ["SI", "SÍ", "APROBADO"]:
+        return "A"
+    
+    if s == "D" or s.startswith("DEFIC") or s.startswith("NO APROB") or s == "0" or s in ["NO", "DEFICIENTE"]:
+        return "D"
+    
+    if any(k in s for k in ["POR EVALUAR", "PENDIENTE", "SIN JUICIO", "SIN EVALUAR", "NO EVALUADO"]):
+        return "P"
+    
+    return "P"
+
+
+class SenaReader:
+    """Lee archivos .xlsx y .csv en una lista de diccionarios limpios."""
+    
+    @staticmethod
+    def read_file(file_bytes: bytes, filename: str) -> Tuple[List[str], List[Dict[str, Any]]]:
+        lower_name = filename.lower()
+        if lower_name.endswith((".xlsx", ".xlsm")):
+            return SenaReader._read_excel(file_bytes)
+        else:
+            return SenaReader._read_csv(file_bytes)
+
+    @staticmethod
+    def _read_excel(file_bytes: bytes) -> Tuple[List[str], List[Dict[str, Any]]]:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return [], []
+        
+        # Buscar la fila de encabezados (a veces SofíaPlus agrega filas de título arriba)
+        header_row_idx = 0
+        for idx, row in enumerate(rows[:10]):
+            clean_cells = [clean_string(c) for c in row if c is not None]
+            # Si contiene palabras clave de Sofía como 'documento' o 'aprendiz' o 'rap' o 'competencia'
+            if any("documento" in c or "aprendiz" in c or "resultado" in c or "competencia" in c or "ficha" in c for c in clean_cells):
+                header_row_idx = idx
+                break
+
+        headers = [str(c).strip() if c is not None else f"Columna_{i+1}" for i, c in enumerate(rows[header_row_idx])]
+        data_rows = []
+        for r in rows[header_row_idx + 1:]:
+            if not any(r):
+                continue
+            row_dict = {}
+            for i, h in enumerate(headers):
+                row_dict[h] = r[i] if i < len(r) else None
+            data_rows.append(row_dict)
+            
+        return headers, data_rows
+
+    @staticmethod
+    def _read_csv(file_bytes: bytes) -> Tuple[List[str], List[Dict[str, Any]]]:
+        # Detección de encoding
+        text = None
+        for enc in ["utf-8-sig", "latin-1", "cp1252", "utf-8"]:
+            try:
+                text = file_bytes.decode(enc)
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            text = file_bytes.decode("latin-1", errors="replace")
+
+        # Detección de delimitador
+        first_few_lines = "\n".join(text.splitlines()[:5])
+        delimiter = ";"
+        if first_few_lines.count(";") < first_few_lines.count(",") and first_few_lines.count(",") > 2:
+            delimiter = ","
+        elif first_few_lines.count("\t") > first_few_lines.count(";"):
+            delimiter = "\t"
+
+        reader = csv.reader(io.StringIO(text), delimiter=delimiter)
+        raw_rows = list(reader)
+        if not raw_rows:
+            return [], []
+
+        # Buscar encabezados
+        header_row_idx = 0
+        for idx, row in enumerate(raw_rows[:10]):
+            clean_cells = [clean_string(c) for c in row if c]
+            if any("documento" in c or "aprendiz" in c or "resultado" in c or "competencia" in c or "ficha" in c for c in clean_cells):
+                header_row_idx = idx
+                break
+
+        headers = [c.strip() if c.strip() else f"Columna_{i+1}" for i, c in enumerate(raw_rows[header_row_idx])]
+        data_rows = []
+        for r in raw_rows[header_row_idx + 1:]:
+            if not any(r):
+                continue
+            row_dict = {}
+            for i, h in enumerate(headers):
+                row_dict[h] = r[i].strip() if i < len(r) else None
+            data_rows.append(row_dict)
+
+        return headers, data_rows
+
+
+def auto_detect_columns(headers: List[str]) -> Dict[str, Optional[str]]:
+    """Mapea automáticamente los encabezados a los campos requeridos del SENA."""
+    mapping: Dict[str, Optional[str]] = {}
+    normalized_headers = {h: clean_string(h) for h in headers}
+
+    for key, synonyms in COLUMN_SYNONYMS.items():
+        matched = None
+        for syn in synonyms:
+            clean_syn = clean_string(syn)
+            for orig_h, norm_h in normalized_headers.items():
+                if clean_syn == norm_h or clean_syn in norm_h:
+                    matched = orig_h
+                    break
+            if matched:
+                break
+        mapping[key] = matched
+
+    return mapping
+
+
+class SenaAnalyzer:
+    """Motor de análisis de avance real frente a los RAPs para grupos de formación SENA."""
+
+    def __init__(self, file_bytes: bytes, filename: str, custom_mapping: Optional[Dict[str, str]] = None):
+        self.filename = filename
+        self.headers, self.raw_data = SenaReader.read_file(file_bytes, filename)
+        self.column_mapping = custom_mapping or auto_detect_columns(self.headers)
+
+    def get_available_columns(self) -> List[str]:
+        return list(self.headers)
+
+    def get_detected_columns(self) -> Dict[str, Optional[str]]:
+        return dict(self.column_mapping)
+
+    def get_unique_states(self) -> List[str]:
+        col_estado = self.column_mapping.get("estado_aprendiz")
+        if not col_estado:
+            return []
+        states = set()
+        for r in self.raw_data:
+            val = r.get(col_estado)
+            if val is not None and str(val).strip():
+                states.add(str(val).strip().upper())
+        return sorted(list(states))
+
+    def run_analysis(
+        self,
+        filter_estados: Optional[List[str]] = None,
+        umbral_verde: float = 80.0,
+        umbral_amarillo: float = 50.0
+    ) -> Dict[str, Any]:
+        """
+        Ejecuta el análisis y retorna un diccionario completo con métricas,
+        semáforos, listados de aprendices y RAPs.
+        """
+        mapping = self.column_mapping
+
+        # Validar columnas mínimas
+        col_doc = mapping.get("documento")
+        col_rap = mapping.get("rap")
+        col_juicio = mapping.get("juicio")
+
+        if not col_doc or not col_rap or not col_juicio:
+            faltantes = []
+            if not col_doc: faltantes.append("Documento Aprendiz")
+            if not col_rap: faltantes.append("Resultado de Aprendizaje (RAP)")
+            if not col_juicio: faltantes.append("Juicio Evaluativo")
+            raise ValueError(f"Faltan columnas indispensables: {', '.join(faltantes)}. Por favor defina el mapeo manual.")
+
+        col_aprendiz = mapping.get("aprendiz")
+        col_comp = mapping.get("competencia")
+        col_estado = mapping.get("estado_aprendiz")
+        col_ficha = mapping.get("ficha")
+        col_prog = mapping.get("programa")
+        col_instructor = mapping.get("instructor")
+
+        # 1. Filtrado de registros y recolección de metadatos
+        fichas_encontradas = set()
+        programas_encontrados = set()
+        estados_totales = set()
+        aprendices_totales_set = set()
+
+        # Almacenar juicios limpios: (doc, rap) -> juicio más favorable (A > D > P)
+        # y metadatos del aprendiz: doc -> {nombre, estado}
+        # y metadatos del RAP: rap -> {competencia, instructor}
+        aprendiz_meta: Dict[str, Dict[str, str]] = {}
+        rap_meta: Dict[str, Dict[str, str]] = {}
+        
+        # Primero una pasada para conocer todos los aprendices y estados
+        for row in self.raw_data:
+            doc_raw = row.get(col_doc)
+            if doc_raw is None or not str(doc_raw).strip():
+                continue
+            doc = str(doc_raw).strip().replace(".0", "")
+            aprendices_totales_set.add(doc)
+
+            if col_estado:
+                est = str(row.get(col_estado) or "").strip().upper()
+                if est:
+                    estados_totales.add(est)
+
+            if col_ficha:
+                f = str(row.get(col_ficha) or "").strip()
+                if f: fichas_encontradas.add(f)
+
+            if col_prog:
+                p = str(row.get(col_prog) or "").strip()
+                if p: programas_encontrados.add(p)
+
+        # Filtro de aprendices por estado seleccionado
+        filter_set = set([str(x).strip().upper() for x in filter_estados]) if filter_estados else None
+
+        # Matriz: doc -> {rap: juicio}
+        matriz_juicios: Dict[str, Dict[str, str]] = defaultdict(dict)
+
+        for row in self.raw_data:
+            doc_raw = row.get(col_doc)
+            rap_raw = row.get(col_rap)
+            if doc_raw is None or rap_raw is None:
+                continue
+
+            doc = str(doc_raw).strip().replace(".0", "")
+            rap = str(rap_raw).strip()
+            if not doc or not rap:
+                continue
+
+            # Verificar estado si se aplica filtro
+            est_aprendiz = str(row.get(col_estado) or "EN FORMACIÓN").strip().upper() if col_estado else "EN FORMACIÓN"
+            if filter_set and est_aprendiz not in filter_set:
+                continue
+
+            # Nombre
+            nom = doc
+            if col_aprendiz and row.get(col_aprendiz):
+                nom = str(row.get(col_aprendiz)).strip().upper()
+
+            if doc not in aprendiz_meta:
+                aprendiz_meta[doc] = {"doc": doc, "nombre": nom, "estado": est_aprendiz}
+
+            # Metadatos del RAP
+            comp = str(row.get(col_comp) or "COMPETENCIA GENERAL").strip() if col_comp else "COMPETENCIA GENERAL"
+            inst = str(row.get(col_instructor) or "No especificado").strip() if col_instructor else "No especificado"
+            if rap not in rap_meta:
+                rap_meta[rap] = {"rap": rap, "competencia": comp, "instructor": inst}
+
+            # Juicio
+            raw_j = row.get(col_juicio)
+            norm_j = normalize_juicio(raw_j)
+
+            # Prioridad de juicio en caso de registros duplicados: 'A' > 'D' > 'P'
+            curr_j = matriz_juicios[doc].get(rap, "P")
+            if curr_j == "A":
+                pass
+            elif norm_j == "A":
+                matriz_juicios[doc][rap] = "A"
+            elif norm_j == "D" and curr_j != "A":
+                matriz_juicios[doc][rap] = "D"
+            elif curr_j not in ["A", "D"]:
+                matriz_juicios[doc][rap] = norm_j
+
+        total_aprendices_analizados = len(aprendiz_meta)
+        if total_aprendices_analizados == 0:
+            raise ValueError("No se encontraron aprendices para analizar con el filtro de estado seleccionado.")
+
+        lista_raps = sorted(list(rap_meta.keys()))
+        total_raps = len(lista_raps)
+        lista_docs = sorted(list(aprendiz_meta.keys()), key=lambda d: aprendiz_meta[d]["nombre"])
+
+        # -------------------------------------------------------------
+        # 2. CÁLCULO DETALLADO POR RAP
+        # -------------------------------------------------------------
+        resumen_raps = []
+        for rap in lista_raps:
+            n_aprob = 0
+            n_defic = 0
+            n_pend = 0
+
+            for doc in lista_docs:
+                j = matriz_juicios[doc].get(rap, "P")
+                if j == "A":
+                    n_aprob += 1
+                elif j == "D":
+                    n_defic += 1
+                else:
+                    n_pend += 1
+
+            pct_aprob = round((n_aprob / total_aprendices_analizados) * 100, 1)
+            pct_defic = round((n_defic / total_aprendices_analizados) * 100, 1)
+            pct_pend = round((n_pend / total_aprendices_analizados) * 100, 1)
+
+            if pct_aprob >= umbral_verde:
+                semaforo = "🟢 Óptimo"
+                categoria_cod = "optimo"
+            elif pct_aprob >= umbral_amarillo:
+                semaforo = "🟡 En Avance"
+                categoria_cod = "en_avance"
+            else:
+                semaforo = "🔴 Crítico / Rezago"
+                categoria_cod = "critico"
+
+            resumen_raps.append({
+                "rap": rap,
+                "competencia": rap_meta[rap]["competencia"],
+                "instructor": rap_meta[rap]["instructor"],
+                "aprobados": n_aprob,
+                "deficientes": n_defic,
+                "pendientes": n_pend,
+                "porcentaje_aprobado": pct_aprob,
+                "porcentaje_deficiente": pct_defic,
+                "porcentaje_pendiente": pct_pend,
+                "semaforo": semaforo,
+                "categoria_cod": categoria_cod
+            })
+
+        # Ordenar RAPs: primero los críticos (menor avance) para enfocar atención
+        resumen_raps.sort(key=lambda x: (x["porcentaje_aprobado"], x["aprobados"]))
+
+        # -------------------------------------------------------------
+        # 3. CÁLCULO DETALLADO POR APRENDIZ
+        # -------------------------------------------------------------
+        resumen_aprendices = []
+        for doc in lista_docs:
+            info = aprendiz_meta[doc]
+            n_aprob = 0
+            n_defic = 0
+            n_pend = 0
+            raps_def_list = []
+            raps_pend_list = []
+
+            for rap in lista_raps:
+                j = matriz_juicios[doc].get(rap, "P")
+                if j == "A":
+                    n_aprob += 1
+                elif j == "D":
+                    n_defic += 1
+                    raps_def_list.append(rap)
+                else:
+                    n_pend += 1
+                    raps_pend_list.append(rap)
+
+            pct_avance = round((n_aprob / total_raps) * 100, 1) if total_raps > 0 else 0.0
+
+            if pct_avance >= umbral_verde:
+                situacion = "🟢 Al Día"
+                situacion_cod = "al_dia"
+            elif pct_avance >= umbral_amarillo:
+                situacion = "🟡 En Observación"
+                situacion_cod = "observacion"
+            else:
+                situacion = "🔴 Alto Riesgo Académico"
+                situacion_cod = "riesgo"
+
+            resumen_aprendices.append({
+                "documento": doc,
+                "nombre": info["nombre"],
+                "estado_sofia": info["estado"],
+                "raps_aprobados": n_aprob,
+                "raps_deficientes": n_defic,
+                "raps_pendientes": n_pend,
+                "porcentaje_avance": pct_avance,
+                "situacion": situacion,
+                "situacion_cod": situacion_cod,
+                "raps_deficientes_lista": raps_def_list,
+                "raps_pendientes_lista": raps_pend_list,
+                "total_faltantes": n_defic + n_pend
+            })
+
+        # Ordenar por menor avance
+        resumen_aprendices.sort(key=lambda x: (x["porcentaje_avance"], x["raps_aprobados"]))
+
+        # -------------------------------------------------------------
+        # 4. ANÁLISIS POR COMPETENCIA
+        # -------------------------------------------------------------
+        competencias_dict: Dict[str, List[str]] = defaultdict(list)
+        for rap, meta in rap_meta.items():
+            competencias_dict[meta["competencia"]].append(rap)
+
+        resumen_competencias = []
+        for comp_name, comp_raps in competencias_dict.items():
+            total_raps_comp = len(comp_raps)
+            max_evals = total_raps_comp * total_aprendices_analizados
+            aprob_comp = 0
+            defic_comp = 0
+
+            for rap in comp_raps:
+                for doc in lista_docs:
+                    j = matriz_juicios[doc].get(rap, "P")
+                    if j == "A":
+                        aprob_comp += 1
+                    elif j == "D":
+                        defic_comp += 1
+
+            pend_comp = max_evals - aprob_comp - defic_comp
+            pct_comp = round((aprob_comp / max_evals) * 100, 1) if max_evals > 0 else 0.0
+
+            if pct_comp >= umbral_verde:
+                estado_comp = "🟢 Consolidada"
+            elif pct_comp >= umbral_amarillo:
+                estado_comp = "🟡 En Progreso"
+            else:
+                estado_comp = "🔴 Rezagada"
+
+            resumen_competencias.append({
+                "competencia": comp_name,
+                "total_raps": total_raps_comp,
+                "aprobados": aprob_comp,
+                "deficientes": defic_comp,
+                "pendientes": pend_comp,
+                "porcentaje_avance": pct_comp,
+                "estado": estado_comp,
+                "raps": comp_raps
+            })
+
+        resumen_competencias.sort(key=lambda x: x["porcentaje_avance"], reverse=True)
+
+        # -------------------------------------------------------------
+        # 5. MATRIZ APRENDIZ X RAP (PARA VISUALIZACIÓN)
+        # -------------------------------------------------------------
+        matriz_tabla = []
+        for doc in lista_docs:
+            row_vals = {
+                "documento": doc,
+                "nombre": aprendiz_meta[doc]["nombre"],
+                "juicios": {rap: matriz_juicios[doc].get(rap, "P") for rap in lista_raps}
+            }
+            matriz_tabla.append(row_vals)
+
+        # -------------------------------------------------------------
+        # 6. MÉTRICAS GLOBALES CONSOLIDADAS
+        # -------------------------------------------------------------
+        total_evaluaciones_posibles = total_raps * total_aprendices_analizados
+        total_aprobados = sum(r["aprobados"] for r in resumen_raps)
+        total_deficientes = sum(r["deficientes"] for r in resumen_raps)
+        total_por_evaluar = total_evaluaciones_posibles - total_aprobados - total_deficientes
+
+        pct_avance_real = round((total_aprobados / total_evaluaciones_posibles) * 100, 2) if total_evaluaciones_posibles > 0 else 0.0
+        
+        evaluaciones_emitidas = total_aprobados + total_deficientes
+        pct_aprob_evaluados = round((total_aprobados / evaluaciones_emitidas) * 100, 2) if evaluaciones_emitidas > 0 else 0.0
+        pct_cobertura = round((evaluaciones_emitidas / total_evaluaciones_posibles) * 100, 2) if total_evaluaciones_posibles > 0 else 0.0
+
+        raps_criticos = sum(1 for r in resumen_raps if r["categoria_cod"] == "critico")
+        raps_en_avance = sum(1 for r in resumen_raps if r["categoria_cod"] == "en_avance")
+        raps_optimos = sum(1 for r in resumen_raps if r["categoria_cod"] == "optimo")
+
+        aprendices_al_dia = sum(1 for a in resumen_aprendices if a["situacion_cod"] == "al_dia")
+        aprendices_observacion = sum(1 for a in resumen_aprendices if a["situacion_cod"] == "observacion")
+        aprendices_riesgo = sum(1 for a in resumen_aprendices if a["situacion_cod"] == "riesgo")
+
+        ficha_text = ", ".join(sorted(list(fichas_encontradas))[:3]) if fichas_encontradas else "Ficha no especificada"
+        programa_text = next(iter(programas_encontrados)) if programas_encontrados else "Programa de Formación SENA"
+
+        return {
+            "meta": {
+                "ficha": ficha_text,
+                "programa": programa_text,
+                "total_aprendices_totales": len(aprendices_totales_set),
+                "total_aprendices_analizados": total_aprendices_analizados,
+                "estados_disponibles": sorted(list(estados_totales)),
+                "total_raps": total_raps,
+                "total_competencias": len(competencias_dict),
+                "umbral_verde": umbral_verde,
+                "umbral_amarillo": umbral_amarillo
+            },
+            "kpis": {
+                "porcentaje_avance_real": pct_avance_real,
+                "porcentaje_aprobacion_evaluados": pct_aprob_evaluados,
+                "porcentaje_cobertura_evaluativa": pct_cobertura,
+                "total_evaluaciones_posibles": total_evaluaciones_posibles,
+                "total_aprobados": total_aprobados,
+                "total_deficientes": total_deficientes,
+                "total_por_evaluar": total_por_evaluar,
+                "raps_criticos": raps_criticos,
+                "raps_en_avance": raps_en_avance,
+                "raps_optimos": raps_optimos,
+                "aprendices_al_dia": aprendices_al_dia,
+                "aprendices_observacion": aprendices_observacion,
+                "aprendices_riesgo": aprendices_riesgo
+            },
+            "raps": resumen_raps,
+            "aprendices": resumen_aprendices,
+            "competencias": resumen_competencias,
+            "matriz": {
+                "raps": lista_raps,
+                "filas": matriz_tabla
+            }
+        }
