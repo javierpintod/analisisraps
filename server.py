@@ -26,6 +26,26 @@ SESSION_DATA = {
     "last_analysis": None
 }
 
+def preload_default_sample():
+    """Precarga el archivo de prueba para que la aplicación inicie con datos listos."""
+    try:
+        sample_path = os.path.join(BASE_DIR, "data", "muestra_sena_juicios_evaluativos.xlsx")
+        if not os.path.exists(sample_path):
+            generate_sample_excel(sample_path)
+        with open(sample_path, "rb") as f:
+            content = f.read()
+        SESSION_DATA["file_bytes"] = content
+        SESSION_DATA["filename"] = "muestra_sena_juicios_evaluativos.xlsx"
+        analyzer = SenaAnalyzer(content, SESSION_DATA["filename"])
+        SESSION_DATA["last_analysis"] = analyzer.run_analysis(filter_estados=["EN FORMACIÓN"])
+        print("  -> Archivo de prueba SENA precargado exitosamente en memoria.")
+    except Exception as e:
+        print(f"  [Aviso] No se pudo precargar la muestra: {e}")
+
+# Ejecutar precarga al importar/iniciar
+preload_default_sample()
+
+
 
 class SenaApiHandler(BaseHTTPRequestHandler):
     
@@ -142,9 +162,14 @@ class SenaApiHandler(BaseHTTPRequestHandler):
                 mapping = analyzer.get_detected_columns()
                 states = analyzer.get_unique_states()
 
-                # Ejecutar análisis preliminar con 'EN FORMACIÓN' si existe
+                # Ejecutar análisis preliminar con 'EN FORMACIÓN' si existe, o sin filtro si no hay
                 initial_filters = [s for s in states if "FORMACI" in s] or None
-                analysis = analyzer.run_analysis(filter_estados=initial_filters)
+                try:
+                    analysis = analyzer.run_analysis(filter_estados=initial_filters)
+                except Exception as e_filter:
+                    sys.stderr.write(f"[Info] Filtro inicial '{initial_filters}' no aplicable: {e_filter}. Analizando todos los estados.\n")
+                    analysis = analyzer.run_analysis(filter_estados=None)
+
                 SESSION_DATA["last_analysis"] = analysis
 
                 self._send_json(200, {
@@ -156,8 +181,11 @@ class SenaApiHandler(BaseHTTPRequestHandler):
                     "analysis": analysis
                 })
             except Exception as e:
+                import traceback
+                traceback.print_exc(file=sys.stderr)
                 self._send_json(400, {"success": False, "error": str(e)})
             return
+
 
         elif path == "/api/analyze":
             try:

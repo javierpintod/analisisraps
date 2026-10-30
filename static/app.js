@@ -141,8 +141,8 @@ document.addEventListener("DOMContentLoaded", () => {
     // -------------------------------------------------------------
     // CARGAR ARCHIVO DE MUESTRA (DEMO)
     // -------------------------------------------------------------
-    btnLoadSample.addEventListener("click", async () => {
-        showToast("Cargando Ficha Demo ADSO 2714589...");
+    async function loadSampleData(showNotification = true) {
+        if (showNotification) showToast("Cargando archivo de prueba SENA...");
         try {
             const res = await fetch("/api/sample");
             const data = await res.json();
@@ -155,12 +155,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
             setupStateChips(data.states);
             renderDashboard(data.analysis);
-            showToast("Ficha Demo ADSO cargada con éxito");
+            if (showNotification) showToast("Archivo de prueba cargado con éxito");
         } catch (err) {
             console.error(err);
-            showToast(err.message, true);
+            if (showNotification) showToast(err.message, true);
         }
-    });
+    }
+
+    btnLoadSample.addEventListener("click", () => loadSampleData(true));
+
 
     // -------------------------------------------------------------
     // FILTROS DE ESTADO Y UMBRALES
@@ -606,4 +609,8 @@ document.addEventListener("DOMContentLoaded", () => {
             .replace(/"/g, "&quot;")
             .replace(/'/g, "&#039;");
     }
+
+    // Cargar automáticamente el archivo de prueba al iniciar
+    loadSampleData(false);
 });
+

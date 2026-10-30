@@ -16,44 +16,52 @@ import openpyxl
 COLUMN_SYNONYMS = {
     "ficha": [
         "ficha", "numero_ficha", "número de ficha", "numero de ficha", "codigo_ficha",
-        "código de ficha", "ficha de caracterizacion", "ficha de caracterización", "grupo"
+        "código de ficha", "ficha de caracterizacion", "ficha de caracterización", "grupo",
+        "id_ficha", "ficha caracterizacion", "no ficha", "no. ficha"
     ],
     "programa": [
         "programa", "nombre_programa", "programa de formación", "programa de formacion",
-        "denominacion", "denominación de programa"
+        "denominacion", "denominación de programa", "nombre del programa", "programa formacion"
     ],
     "documento": [
         "documento", "numero_documento", "número de documento", "identificacion",
-        "identificación", "doc", "numero_doc", "cedula", "cédula", "no. documento"
+        "identificación", "doc", "numero_doc", "cedula", "cédula", "no. documento",
+        "numero doc", "num doc", "nro documento", "nro doc", "documento de identidad",
+        "no_documento", "num_documento", "identificacion aprendiz"
     ],
     "aprendiz": [
         "aprendiz", "nombre_aprendiz", "nombre aprendiz", "nombres y apellidos",
-        "nombre completo", "aprendices", "nombre del aprendiz", "nombres", "estudiante"
+        "nombre completo", "aprendices", "nombre del aprendiz", "nombres", "estudiante",
+        "nombre", "alumno", "nombre y apellidos", "apellidos y nombres", "datos aprendiz"
     ],
     "estado_aprendiz": [
         "estado_aprendiz", "estado aprendiz", "estado del aprendiz", "estado",
-        "estado matricula", "estado de matrícula", "estado matricula aprendiz"
+        "estado matricula", "estado de matrícula", "estado matricula aprendiz",
+        "estado en la ficha", "situacion del aprendiz", "situacion aprendiz", "estado formacion"
     ],
     "competencia": [
         "competencia", "nombre_competencia", "código competencia", "codigo competencia",
-        "descripcion competencia", "descripción competencia", "nombre de competencia"
+        "descripcion competencia", "descripción competencia", "nombre de competencia",
+        "competencia laboral", "competencia asociada", "desc competencia"
     ],
     "rap": [
         "resultado_aprendizaje", "resultado de aprendizaje", "rap", "nombre_rap",
-        "descripción rap", "descripcion rap", "resultado", "nombre resultado de aprendizaje"
+        "descripción rap", "descripcion rap", "resultado", "nombre resultado de aprendizaje",
+        "resultado aprendizaje", "resultado de aprendizaje asociado", "desc rap", "ra", "codigo rap"
     ],
     "juicio": [
         "juicio_evaluativo", "juicio evaluativo", "juicio", "estado juicio",
         "estado_juicio", "calificacion", "calificación", "estado de evaluacion", "evaluacion",
-        "juicio de evaluacion", "resultado evaluacion"
+        "juicio de evaluacion", "resultado evaluacion", "concepto evaluativo", "concepto",
+        "estado del juicio", "valor juicio", "juicio valorativo", "evaluacion rap"
     ],
     "fecha_juicio": [
         "fecha_juicio", "fecha juicio", "fecha evaluacion", "fecha_evaluacion",
-        "fecha de evaluacion", "fecha de juicio", "fecha"
+        "fecha de evaluacion", "fecha de juicio", "fecha", "fecha registro"
     ],
     "instructor": [
         "instructor", "nombre_instructor", "evaluador", "instructor asignado",
-        "docente", "funcionario"
+        "docente", "funcionario", "tutor", "profesor"
     ]
 }
 
