@@ -740,3 +740,192 @@ class SenaAnalyzer:
                 "filas": matriz_tabla
             }
         }
+
+
+class MultiFichaAnalyzer:
+    """Motor de análisis simultáneo para múltiples fichas y grupos de formación SENA."""
+
+    def __init__(self, files: List[Tuple[str, bytes]], custom_mapping: Optional[Dict[str, str]] = None):
+        """
+        files: Lista de tuplas (nombre_archivo, contenido_bytes)
+        """
+        self.files = files
+        self.custom_mapping = custom_mapping
+        self.analyzers: List[SenaAnalyzer] = []
+        
+        for fname, fbytes in files:
+            analyzer = SenaAnalyzer(fbytes, fname, custom_mapping=custom_mapping)
+            self.analyzers.append(analyzer)
+
+    def get_unique_states(self) -> List[str]:
+        states = set()
+        for a in self.analyzers:
+            for s in a.get_unique_states():
+                states.add(s)
+        return sorted(list(states))
+
+    def run_multi_analysis(
+        self,
+        filter_estados: Optional[List[str]] = None,
+        umbral_verde: float = 80.0,
+        umbral_amarillo: float = 50.0
+    ) -> Dict[str, Any]:
+        """
+        Ejecuta el análisis sobre todas las fichas cargadas, generando:
+        1. Diagnóstico individual por cada ficha.
+        2. Consolidado general y ranking comparativo entre fichas.
+        """
+        detalle_fichas: Dict[str, Any] = {}
+        fichas_resumen: List[Dict[str, Any]] = []
+
+        total_posibles_acum = 0
+        total_aprobados_acum = 0
+        total_deficientes_acum = 0
+        total_pendientes_acum = 0
+        total_aprendices_acum = 0
+        total_aprendices_totales_acum = 0
+        estados_totales = set()
+        aprendices_riesgo_todos = []
+
+        for idx, analyzer in enumerate(self.analyzers):
+            try:
+                res = analyzer.run_analysis(
+                    filter_estados=filter_estados,
+                    umbral_verde=umbral_verde,
+                    umbral_amarillo=umbral_amarillo
+                )
+            except Exception as e:
+                # Si una ficha falla con el filtro de estado, intentar sin filtro
+                try:
+                    res = analyzer.run_analysis(filter_estados=None, umbral_verde=umbral_verde, umbral_amarillo=umbral_amarillo)
+                except Exception as e2:
+                    continue
+
+            ficha_id = res["meta"]["ficha"]
+            # En caso de fichas con nombre duplicado o no especificado
+            if ficha_id in detalle_fichas or not ficha_id or ficha_id == "Ficha no especificada":
+                ficha_id = f"{ficha_id} ({analyzer.filename})"
+
+            detalle_fichas[ficha_id] = res
+
+            kpis = res["kpis"]
+            total_posibles_acum += kpis["total_evaluaciones_posibles"]
+            total_aprobados_acum += kpis["total_aprobados"]
+            total_deficientes_acum += kpis["total_deficientes"]
+            total_pendientes_acum += kpis["total_por_evaluar"]
+            total_aprendices_acum += res["meta"]["total_aprendices_analizados"]
+            total_aprendices_totales_acum += res["meta"]["total_aprendices_totales"]
+            estados_totales.update(res["meta"]["estados_disponibles"])
+
+            # Semáforo de la ficha
+            pct_av = kpis["porcentaje_avance_real"]
+            if pct_av >= umbral_verde:
+                sem = "🟢 Óptimo"
+                sem_cod = "optimo"
+            elif pct_av >= umbral_amarillo:
+                sem = "🟡 En Avance"
+                sem_cod = "en_avance"
+            else:
+                sem = "🔴 Crítico"
+                sem_cod = "critico"
+
+            ficha_item = {
+                "id": ficha_id,
+                "ficha": res["meta"]["ficha"],
+                "archivo": analyzer.filename,
+                "programa": res["meta"]["programa"],
+                "total_aprendices": res["meta"]["total_aprendices_analizados"],
+                "total_raps": res["meta"]["total_raps"],
+                "porcentaje_avance": pct_av,
+                "porcentaje_aprobacion": kpis["porcentaje_aprobacion_evaluados"],
+                "porcentaje_cobertura": kpis["porcentaje_cobertura_evaluativa"],
+                "aprobados": kpis["total_aprobados"],
+                "deficientes": kpis["total_deficientes"],
+                "pendientes": kpis["total_por_evaluar"],
+                "raps_criticos": kpis["raps_criticos"],
+                "aprendices_riesgo": kpis["aprendices_riesgo"],
+                "semaforo": sem,
+                "semaforo_cod": sem_cod
+            }
+            fichas_resumen.append(ficha_item)
+
+            # Acumular aprendices con ficha asociada para la vista de riesgo
+            for apr in res["aprendices"]:
+                apr_copy = dict(apr)
+                apr_copy["ficha"] = res["meta"]["ficha"]
+                aprendices_riesgo_todos.append(apr_copy)
+
+        if not detalle_fichas:
+            raise ValueError("No se pudo procesar ninguna ficha válida con los archivos proporcionados.")
+
+        # Ordenar fichas por menor avance para visibilizar rezagos
+        fichas_resumen.sort(key=lambda x: x["porcentaje_avance"])
+        aprendices_riesgo_todos.sort(key=lambda x: (x["porcentaje_avance"], x["raps_aprobados"]))
+
+        # Métricas Globales Consolidadas
+        pct_global_avance = round((total_aprobados_acum / total_posibles_acum) * 100, 2) if total_posibles_acum > 0 else 0.0
+        evaluaciones_emitidas_acum = total_aprobados_acum + total_deficientes_acum
+        pct_global_aprob = round((total_aprobados_acum / evaluaciones_emitidas_acum) * 100, 2) if evaluaciones_emitidas_acum > 0 else 0.0
+        pct_global_cobertura = round((evaluaciones_emitidas_acum / total_posibles_acum) * 100, 2) if total_posibles_acum > 0 else 0.0
+
+        consolidado = {
+            "meta": {
+                "ficha": f"Consolidado General ({len(detalle_fichas)} Fichas)",
+                "programa": "Múltiples Programas de Formación SENA" if len(set(f["programa"] for f in fichas_resumen)) > 1 else fichas_resumen[0]["programa"],
+                "total_fichas": len(detalle_fichas),
+                "total_aprendices_totales": total_aprendices_totales_acum,
+                "total_aprendices_analizados": total_aprendices_acum,
+                "estados_disponibles": sorted(list(estados_totales)),
+                "total_raps": sum(f["total_raps"] for f in fichas_resumen),
+                "umbral_verde": umbral_verde,
+                "umbral_amarillo": umbral_amarillo
+            },
+            "kpis": {
+                "porcentaje_avance_real": pct_global_avance,
+                "porcentaje_aprobacion_evaluados": pct_global_aprob,
+                "porcentaje_cobertura_evaluativa": pct_global_cobertura,
+                "total_evaluaciones_posibles": total_posibles_acum,
+                "total_aprobados": total_aprobados_acum,
+                "total_deficientes": total_deficientes_acum,
+                "total_por_evaluar": total_pendientes_acum,
+                "raps_criticos": sum(f["raps_criticos"] for f in fichas_resumen),
+                "raps_en_avance": sum(detalle_fichas[f["id"]]["kpis"]["raps_en_avance"] for f in fichas_resumen),
+                "raps_optimos": sum(detalle_fichas[f["id"]]["kpis"]["raps_optimos"] for f in fichas_resumen),
+                "aprendices_al_dia": sum(detalle_fichas[f["id"]]["kpis"]["aprendices_al_dia"] for f in fichas_resumen),
+                "aprendices_observacion": sum(detalle_fichas[f["id"]]["kpis"]["aprendices_observacion"] for f in fichas_resumen),
+                "aprendices_riesgo": sum(f["aprendices_riesgo"] for f in fichas_resumen)
+            },
+            "tabla_fichas": fichas_resumen,
+            "aprendices": aprendices_riesgo_todos,
+            "raps": [],
+            "competencias": [],
+            "matriz": {"raps": [], "filas": []}
+        }
+
+        # Lista de selección para la interfaz
+        fichas_nav = [{
+            "id": "ALL",
+            "label": f"📊 Todas las Fichas ({len(detalle_fichas)})",
+            "programa": "Vista Consolidada",
+            "aprendices": total_aprendices_acum,
+            "avance": pct_global_avance,
+            "semaforo": "Consolidado"
+        }]
+        for f in fichas_resumen:
+            fichas_nav.append({
+                "id": f["id"],
+                "label": f"Ficha {f['ficha']} ({f['total_aprendices']} apr.)",
+                "programa": f["programa"],
+                "aprendices": f["total_aprendices"],
+                "avance": f["porcentaje_avance"],
+                "semaforo": f["semaforo"]
+            })
+
+        return {
+            "is_multi_ficha": len(detalle_fichas) > 1,
+            "total_fichas": len(detalle_fichas),
+            "fichas_selector": fichas_nav,
+            "consolidado": consolidado,
+            "detalle_fichas": detalle_fichas
+        }
+

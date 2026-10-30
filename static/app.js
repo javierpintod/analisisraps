@@ -1,11 +1,12 @@
 /**
  * SENA - Sistema de Análisis de Avance por RAPs
- * Controlador Frontend Interactivo en JavaScript Vanilla
+ * Controlador Frontend Interactivo con Soporte Integral Multi-Ficha
  */
 
 document.addEventListener("DOMContentLoaded", () => {
     // Estado global de la aplicación
-    let currentAnalysis = null;
+    let multiAnalysisData = null;      // Respuesta completa del servidor
+    let activeFichaId = "ALL";         // 'ALL' para consolidado, o ID de la ficha seleccionada
     let selectedStates = new Set();
     let currentRapFilter = "all";
     let currentAprFilter = "all";
@@ -25,6 +26,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnApplyFilters = document.getElementById("btn-apply-filters");
     const inputUmbralVerde = document.getElementById("input-umbral-verde");
     const inputUmbralAmarillo = document.getElementById("input-umbral-amarillo");
+
+    // Multi-Ficha Navigator
+    const fichasNavContainer = document.getElementById("fichas-nav-container");
+    const fichasCountBadge = document.getElementById("fichas-count-badge");
+    const fichasPillsRow = document.getElementById("fichas-pills-row");
+    const tabBtnFichas = document.getElementById("tab-btn-fichas");
+    const tabFichas = document.getElementById("tab-fichas");
 
     // Modal
     const modalBackdrop = document.getElementById("modal-backdrop");
@@ -47,7 +55,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // EVENTOS DE SUBIDA DE ARCHIVO (DRAG & DROP)
+    // EVENTOS DE SUBIDA DE ARCHIVO (DRAG & DROP Y MULTI-ARCHIVO)
     // -------------------------------------------------------------
     dropZone.addEventListener("click", () => fileInput.click());
 
@@ -68,14 +76,14 @@ document.addEventListener("DOMContentLoaded", () => {
     dropZone.addEventListener("drop", (e) => {
         const files = e.dataTransfer.files;
         if (files && files.length > 0) {
-            handleFileUpload(files[0]);
+            handleMultipleFilesUpload(Array.from(files));
         }
     });
 
     fileInput.addEventListener("change", (e) => {
         const files = e.target.files;
         if (files && files.length > 0) {
-            handleFileUpload(files[0]);
+            handleMultipleFilesUpload(Array.from(files));
         }
     });
 
@@ -86,7 +94,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function resetAppState() {
         fileInput.value = "";
-        currentAnalysis = null;
+        multiAnalysisData = null;
+        activeFichaId = "ALL";
         fileInfo.style.display = "none";
         emptyState.style.display = "flex";
         dashboardContent.style.display = "none";
@@ -94,31 +103,36 @@ document.addEventListener("DOMContentLoaded", () => {
         btnExportExcel.disabled = true;
     }
 
-    async function handleFileUpload(file) {
-        fileNameText.textContent = file.name;
+    async function handleMultipleFilesUpload(filesList) {
+        if (!filesList || filesList.length === 0) return;
+
+        showToast(`Procesando ${filesList.length} archivo(s) de formación...`);
+        fileNameText.textContent = filesList.length === 1 
+            ? filesList[0].name 
+            : `${filesList.length} archivos de fichas seleccionados`;
         fileInfo.style.display = "inline-flex";
 
-        showToast("Procesando archivo SENA...");
-
         try {
-            const base64 = await readFileAsBase64(file);
+            // Leer todos los archivos en base64 en paralelo
+            const payloadFiles = await Promise.all(filesList.map(async (file) => {
+                const b64 = await readFileAsBase64(file);
+                return { filename: file.name, content_base64: b64 };
+            }));
+
             const res = await fetch("/api/upload", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    filename: file.name,
-                    content_base64: base64
-                })
+                body: JSON.stringify({ files: payloadFiles })
             });
 
             const data = await res.json();
             if (!data.success) {
-                throw new Error(data.error || "Error al procesar el archivo");
+                throw new Error(data.error || "Error al procesar los archivos");
             }
 
             setupStateChips(data.states);
-            renderDashboard(data.analysis);
-            showToast("¡Análisis de RAPs completado exitosamente!");
+            setMultiAnalysisData(data.analysis);
+            showToast(`¡${data.total_fichas} Ficha(s) analizada(s) exitosamente!`);
         } catch (err) {
             console.error(err);
             showToast(err.message, true);
@@ -139,24 +153,23 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // CARGAR ARCHIVO DE MUESTRA (DEMO)
+    // CARGAR ARCHIVO DE MUESTRA (DEMO MULTI-FICHA)
     // -------------------------------------------------------------
     async function loadSampleData(showNotification = true) {
-        if (showNotification) showToast("Cargando archivo de prueba SENA...");
+        if (showNotification) showToast("Cargando fichas de formación SENA...");
         try {
             const res = await fetch("/api/sample");
             const data = await res.json();
             if (!data.success) {
-                throw new Error(data.error || "No se pudo cargar el archivo demo");
+                throw new Error(data.error || "No se pudo cargar la muestra");
             }
 
-            fileNameText.textContent = `${data.filename} (Ficha ${data.analysis.meta.ficha})`;
+            fileNameText.textContent = `${data.total_fichas} Fichas Activas (Ficha 3239137 + Ficha 2714589)`;
             fileInfo.style.display = "inline-flex";
 
             setupStateChips(data.states);
-            renderDashboard(data.analysis);
-            if (showNotification) showToast("Reporte cargado con éxito");
-
+            setMultiAnalysisData(data.analysis);
+            if (showNotification) showToast("Múltiples Fichas cargadas con éxito");
         } catch (err) {
             console.error(err);
             if (showNotification) showToast(err.message, true);
@@ -165,114 +178,77 @@ document.addEventListener("DOMContentLoaded", () => {
 
     btnLoadSample.addEventListener("click", () => loadSampleData(true));
 
-
     // -------------------------------------------------------------
-    // FILTROS DE ESTADO Y UMBRALES
+    // GESTIÓN DE DATOS MULTI-FICHA Y NAVEGACIÓN
     // -------------------------------------------------------------
-    function setupStateChips(states) {
-        stateChipsContainer.innerHTML = "";
-        selectedStates.clear();
+    function setMultiAnalysisData(analysis) {
+        multiAnalysisData = analysis;
+        activeFichaId = "ALL";
 
-        if (!states || states.length === 0) {
-            controlsBar.style.display = "none";
-            return;
-        }
-
-        controlsBar.style.display = "flex";
-
-        states.forEach(st => {
-            const chip = document.createElement("button");
-            chip.type = "button";
-            chip.className = "state-chip";
-            chip.textContent = st;
-
-            // Por defecto seleccionar 'EN FORMACIÓN' o similares
-            if (st.includes("FORMACI") || states.length === 1) {
-                chip.classList.add("active");
-                selectedStates.add(st);
-            }
-
-            chip.addEventListener("click", () => {
-                if (selectedStates.has(st)) {
-                    if (selectedStates.size > 1) {
-                        selectedStates.delete(st);
-                        chip.classList.remove("active");
-                    } else {
-                        showToast("Debe mantener al menos un estado seleccionado", true);
-                    }
-                } else {
-                    selectedStates.add(st);
-                    chip.classList.add("active");
-                }
-            });
-
-            stateChipsContainer.appendChild(chip);
-        });
-    }
-
-    btnApplyFilters.addEventListener("click", async () => {
-        if (!currentAnalysis) return;
-        showToast("Recalculando avance de grupo...");
-
-        const filter_estados = Array.from(selectedStates);
-        const umbral_verde = parseFloat(inputUmbralVerde.value) || 80.0;
-        const umbral_amarillo = parseFloat(inputUmbralAmarillo.value) || 50.0;
-
-        try {
-            const res = await fetch("/api/analyze", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    filter_estados,
-                    umbral_verde,
-                    umbral_amarillo
-                })
-            });
-
-            const data = await res.json();
-            if (!data.success) {
-                throw new Error(data.error);
-            }
-
-            renderDashboard(data.analysis);
-            showToast("Métricas y semáforo actualizados");
-        } catch (err) {
-            showToast(err.message, true);
-        }
-    });
-
-    // -------------------------------------------------------------
-    // EXPORTAR REPORTE EN EXCEL
-    // -------------------------------------------------------------
-    btnExportExcel.addEventListener("click", () => {
-        window.location.href = "/api/export";
-        showToast("Generando y descargando informe oficial en Excel...");
-    });
-
-    // -------------------------------------------------------------
-    // RENDERIZADO DEL DASHBOARD
-    // -------------------------------------------------------------
-    function renderDashboard(analysis) {
-        currentAnalysis = analysis;
         emptyState.style.display = "none";
         dashboardContent.style.display = "block";
         btnExportExcel.disabled = false;
 
-        // Metadatos de Ficha
-        document.getElementById("meta-ficha").textContent = analysis.meta.ficha;
-        document.getElementById("meta-programa").textContent = analysis.meta.programa;
-        document.getElementById("meta-aprendices").textContent = `${analysis.meta.total_aprendices_analizados} Aprendices`;
-        document.getElementById("meta-raps").textContent = `${analysis.meta.total_raps} RAPs`;
+        renderFichasNavigator(analysis.fichas_selector, analysis.total_fichas);
+        renderCurrentView();
+    }
+
+    function renderFichasNavigator(selectorList, totalFichas) {
+        fichasPillsRow.innerHTML = "";
+        fichasCountBadge.textContent = `${totalFichas} Ficha(s) en Análisis`;
+
+        selectorList.forEach(item => {
+            const pill = document.createElement("button");
+            pill.type = "button";
+            pill.className = `ficha-pill ${item.id === activeFichaId ? 'active' : ''}`;
+            
+            const badgeColor = item.id === "ALL" ? "" : (item.avance >= 80 ? "color: var(--color-green);" : (item.avance >= 50 ? "color: var(--color-amber);" : "color: var(--color-red);"));
+            
+            pill.innerHTML = `
+                <span>${escapeHtml(item.label)}</span>
+                <span class="pill-badge" style="${badgeColor}">${item.avance}%</span>
+            `;
+
+            pill.addEventListener("click", () => {
+                activeFichaId = item.id;
+                document.querySelectorAll(".ficha-pill").forEach(p => p.classList.remove("active"));
+                pill.classList.add("active");
+                renderCurrentView();
+            });
+
+            fichasPillsRow.appendChild(pill);
+        });
+    }
+
+    // Renderiza la vista según la ficha activa ('ALL' para consolidado o ID específico)
+    function renderCurrentView() {
+        if (!multiAnalysisData) return;
+
+        const isConsolidado = (activeFichaId === "ALL");
+        const currentData = isConsolidado 
+            ? multiAnalysisData.consolidado 
+            : multiAnalysisData.detalle_fichas[activeFichaId];
+
+        if (!currentData) return;
+
+        // Banner
+        document.getElementById("kpi-tag-context").textContent = isConsolidado ? "Consolidado de Centro" : `Ficha ${currentData.meta.ficha}`;
+        document.getElementById("meta-ficha").textContent = currentData.meta.ficha;
+        document.getElementById("meta-programa").textContent = currentData.meta.programa;
+        document.getElementById("meta-aprendices").textContent = `${currentData.meta.total_aprendices_analizados} Aprendices`;
+        document.getElementById("meta-raps").textContent = isConsolidado 
+            ? `${currentData.meta.total_raps} RAPs Totales` 
+            : `${currentData.meta.total_raps} RAPs`;
 
         // KPIs
-        const kpis = analysis.kpis;
+        const kpis = currentData.kpis;
         const pctAvance = kpis.porcentaje_avance_real;
-        
+
         document.getElementById("kpi-avance-real").textContent = `${pctAvance}%`;
         document.getElementById("kpi-evaluaciones-detalle").textContent = 
             `${kpis.total_aprobados.toLocaleString()} / ${kpis.total_evaluaciones_posibles.toLocaleString()} juicios aprobados`;
 
-        // Anillo Radial SVG (perímetro con r=50 es 2*pi*50 = 314.15)
+        // Anillo Radial SVG (perímetro 314.15)
         const gaugeCircle = document.getElementById("gauge-fill-circle");
         const gaugeText = document.getElementById("gauge-text");
         const circumference = 314.15;
@@ -280,36 +256,129 @@ document.addEventListener("DOMContentLoaded", () => {
         gaugeCircle.style.strokeDashoffset = Math.max(0, offset);
         gaugeText.textContent = `${Math.round(pctAvance)}%`;
 
-        // KPI Eficacia sobre Evaluados
+        // Eficacia
         document.getElementById("kpi-eficacia").textContent = `${kpis.porcentaje_aprobacion_evaluados}%`;
         document.getElementById("bar-eficacia").style.width = `${Math.min(100, kpis.porcentaje_aprobacion_evaluados)}%`;
         document.getElementById("kpi-eficacia-sub").textContent = 
             `${kpis.total_aprobados} Aprobados vs ${kpis.total_deficientes} Deficientes`;
 
-        // KPI Cobertura
+        // Cobertura
         document.getElementById("kpi-cobertura").textContent = `${kpis.porcentaje_cobertura_evaluativa}%`;
         document.getElementById("bar-cobertura").style.width = `${Math.min(100, kpis.porcentaje_cobertura_evaluativa)}%`;
         document.getElementById("kpi-cobertura-sub").textContent = 
-            `${(kpis.total_aprobados + kpis.total_deficientes)} con juicio emitido, ${kpis.total_por_evaluar} pendientes`;
+            `${(kpis.total_aprobados + kpis.total_deficientes)} con juicio, ${kpis.total_por_evaluar} pendientes`;
 
         // Semáforo RAPs Pills
         document.getElementById("count-raps-criticos").textContent = kpis.raps_criticos;
         document.getElementById("count-raps-avance").textContent = kpis.raps_en_avance;
         document.getElementById("count-raps-optimos").textContent = kpis.raps_optimos;
 
-        // Contadores en pestañas
-        document.getElementById("tab-count-raps").textContent = analysis.raps.length;
-        document.getElementById("tab-count-apr").textContent = analysis.aprendices.length;
+        // Gestión de visibilidad de pestañas
+        if (isConsolidado) {
+            tabBtnFichas.style.display = "flex";
+            document.getElementById("tab-count-fichas").textContent = multiAnalysisData.total_fichas;
+            renderComparativeTable(multiAnalysisData.consolidado.tabla_fichas);
 
-        // Renderizado de las 4 secciones
-        renderRapsList(analysis.raps);
-        renderAprendicesTable(analysis.aprendices);
-        renderCompetenciasGrid(analysis.competencias);
-        renderMatrix(analysis.matriz);
+            // En vista consolidada, activar la pestaña de Ranking de Fichas
+            switchTab("tab-fichas");
+        } else {
+            tabBtnFichas.style.display = "none";
+            // En vista de ficha específica, mostrar el semáforo de RAPs
+            switchTab("tab-raps");
+        }
+
+        // Renderizado de las secciones detalladas
+        const rapsParaMostrar = isConsolidado 
+            ? (currentData.raps.length > 0 ? currentData.raps : Object.values(multiAnalysisData.detalle_fichas)[0].raps)
+            : currentData.raps;
+
+        document.getElementById("tab-count-raps").textContent = rapsParaMostrar.length;
+        document.getElementById("tab-count-apr").textContent = currentData.aprendices.length;
+
+        renderRapsList(rapsParaMostrar);
+        renderAprendicesTable(currentData.aprendices, isConsolidado);
+        renderCompetenciasGrid(currentData.competencias.length > 0 ? currentData.competencias : Object.values(multiAnalysisData.detalle_fichas)[0].competencias);
+        renderMatrix(currentData.matriz.filas.length > 0 ? currentData.matriz : Object.values(multiAnalysisData.detalle_fichas)[0].matriz);
+    }
+
+    function switchTab(tabId) {
+        document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".tab-content").forEach(tc => tc.classList.remove("active"));
+
+        const targetBtn = document.querySelector(`.tab-btn[data-tab="${tabId}"]`);
+        const targetContent = document.getElementById(tabId);
+        if (targetBtn) targetBtn.classList.add("active");
+        if (targetContent) targetContent.classList.add("active");
     }
 
     // -------------------------------------------------------------
-    // PESTAÑA 1: LISTADO Y SEMÁFORO DE RAPS
+    // PESTAÑA CONSOLIDADA: TABLA COMPARATIVA DE FICHAS
+    // -------------------------------------------------------------
+    function renderComparativeTable(tablaFichas) {
+        const tbody = document.getElementById("tbody-fichas-comparativo");
+        tbody.innerHTML = "";
+
+        const searchTerm = document.getElementById("search-ficha") ? document.getElementById("search-ficha").value.toLowerCase().trim() : "";
+
+        const filtered = tablaFichas.filter(f => {
+            return !searchTerm || 
+                f.ficha.toLowerCase().includes(searchTerm) || 
+                f.programa.toLowerCase().includes(searchTerm);
+        });
+
+        filtered.forEach(f => {
+            const tr = document.createElement("tr");
+            const fillClass = f.semaforo_cod === "optimo" ? "fill-green" : (f.semaforo_cod === "en_avance" ? "fill-amber" : "fill-red");
+            const badgeClass = f.semaforo_cod === "optimo" ? "status-optimo" : (f.semaforo_cod === "en_avance" ? "status-avance" : "status-critico");
+
+            tr.innerHTML = `
+                <td style="font-weight: 700; color: #FFFFFF;">${escapeHtml(f.ficha)}</td>
+                <td style="max-width: 280px; font-size: 0.8rem;">${escapeHtml(f.programa)}</td>
+                <td style="text-align: center; font-weight: 600;">${f.total_aprendices}</td>
+                <td style="text-align: center;">${f.total_raps}</td>
+                <td>
+                    <div style="display: flex; align-items: center; gap: 0.5rem;">
+                        <div class="kpi-progress-bar" style="width: 70px; margin-bottom: 0;">
+                            <div class="progress-fill ${fillClass}" style="width: ${f.porcentaje_avance}%"></div>
+                        </div>
+                        <span style="font-weight: 700;">${f.porcentaje_avance}%</span>
+                    </div>
+                </td>
+                <td style="text-align: center; color: var(--color-green); font-weight: 600;">${f.porcentaje_aprobacion}%</td>
+                <td style="text-align: center; color: var(--color-blue);">${f.porcentaje_cobertura}%</td>
+                <td style="text-align: center; color: ${f.raps_criticos > 0 ? 'var(--color-red)' : 'var(--text-muted)'}; font-weight: 600;">${f.raps_criticos}</td>
+                <td style="text-align: center; color: ${f.aprendices_riesgo > 0 ? 'var(--color-red)' : 'var(--text-muted)'}; font-weight: 600;">${f.aprendices_riesgo}</td>
+                <td><span class="status-badge ${badgeClass}">${f.semaforo}</span></td>
+                <td>
+                    <button class="btn-inspect-ficha" data-ficha-id="${f.id}">Inspeccionar Ficha</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        // Eventos para inspeccionar ficha individual
+        tbody.querySelectorAll(".btn-inspect-ficha").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const fid = btn.dataset.fichaId;
+                activeFichaId = fid;
+                document.querySelectorAll(".ficha-pill").forEach(p => p.classList.remove("active"));
+                const pillToActivate = Array.from(document.querySelectorAll(".ficha-pill")).find(p => p.textContent.includes(fid));
+                if (pillToActivate) pillToActivate.classList.add("active");
+                renderCurrentView();
+            });
+        });
+    }
+
+    if (document.getElementById("search-ficha")) {
+        document.getElementById("search-ficha").addEventListener("input", () => {
+            if (multiAnalysisData && multiAnalysisData.consolidado.tabla_fichas) {
+                renderComparativeTable(multiAnalysisData.consolidado.tabla_fichas);
+            }
+        });
+    }
+
+    // -------------------------------------------------------------
+    // PESTAÑA: SEMÁFORO DE RAPS
     // -------------------------------------------------------------
     function renderRapsList(raps) {
         const container = document.getElementById("raps-list-container");
@@ -327,7 +396,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         if (filtered.length === 0) {
-            container.innerHTML = `<div style="text-align:center; padding: 2rem; color: var(--text-muted);">No se encontraron RAPs que coincidan con los filtros.</div>`;
+            container.innerHTML = `<div style="text-align:center; padding: 2rem; color: var(--text-muted);">No se encontraron RAPs con los filtros seleccionados.</div>`;
             return;
         }
 
@@ -342,7 +411,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 <div>
                     <div class="rap-comp-name">${escapeHtml(r.competencia)}</div>
                     <div class="rap-title">${escapeHtml(r.rap)}</div>
-                    <div class="rap-instructor">👨‍🏫 Instructor: <strong>${escapeHtml(r.instructor || 'Por asignar')}</strong></div>
+                    <div class="rap-instructor">👨‍🏫 Instructor Evaluador: <strong>${escapeHtml(r.instructor || 'Por asignar')}</strong></div>
                 </div>
                 <div class="rap-progress-col">
                     <div class="rap-stats-header">
@@ -368,7 +437,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     document.getElementById("search-rap").addEventListener("input", () => {
-        if (currentAnalysis) renderRapsList(currentAnalysis.raps);
+        if (multiAnalysisData) {
+            const currentData = activeFichaId === "ALL" 
+                ? Object.values(multiAnalysisData.detalle_fichas)[0] 
+                : multiAnalysisData.detalle_fichas[activeFichaId];
+            renderRapsList(currentData.raps);
+        }
     });
 
     document.querySelectorAll("#rap-status-filter .filter-chip").forEach(btn => {
@@ -376,14 +450,19 @@ document.addEventListener("DOMContentLoaded", () => {
             document.querySelectorAll("#rap-status-filter .filter-chip").forEach(b => b.classList.remove("active"));
             btn.classList.add("active");
             currentRapFilter = btn.dataset.filter;
-            if (currentAnalysis) renderRapsList(currentAnalysis.raps);
+            if (multiAnalysisData) {
+                const currentData = activeFichaId === "ALL" 
+                    ? Object.values(multiAnalysisData.detalle_fichas)[0] 
+                    : multiAnalysisData.detalle_fichas[activeFichaId];
+                renderRapsList(currentData.raps);
+            }
         });
     });
 
     // -------------------------------------------------------------
-    // PESTAÑA 2: DIAGNÓSTICO POR APRENDIZ
+    // PESTAÑA: DIAGNÓSTICO POR APRENDIZ
     // -------------------------------------------------------------
-    function renderAprendicesTable(aprendices) {
+    function renderAprendicesTable(aprendices, isConsolidado = false) {
         const tbody = document.getElementById("tbody-aprendices");
         tbody.innerHTML = "";
 
@@ -393,12 +472,13 @@ document.addEventListener("DOMContentLoaded", () => {
             const matchesCategory = currentAprFilter === "all" || a.situacion_cod === currentAprFilter;
             const matchesSearch = !searchTerm ||
                 a.nombre.toLowerCase().includes(searchTerm) ||
-                a.documento.includes(searchTerm);
+                a.documento.includes(searchTerm) ||
+                (a.ficha && a.ficha.includes(searchTerm));
             return matchesCategory && matchesSearch;
         });
 
         if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">No se encontraron aprendices con ese criterio de búsqueda.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 2rem;">No se encontraron aprendices con ese criterio.</td></tr>`;
             return;
         }
 
@@ -409,6 +489,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const badgeClass = a.situacion_cod === "al_dia" ? "status-optimo" : (a.situacion_cod === "observacion" ? "status-avance" : "status-critico");
 
             tr.innerHTML = `
+                <td style="font-weight: 600; color: var(--sena-primary);">${escapeHtml(a.ficha || '-')}</td>
                 <td class="apr-name-col">${escapeHtml(a.nombre)}</td>
                 <td>${escapeHtml(a.documento)}</td>
                 <td><span style="font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; background: rgba(255,255,255,0.06);">${escapeHtml(a.estado_sofia)}</span></td>
@@ -435,14 +516,20 @@ document.addEventListener("DOMContentLoaded", () => {
         tbody.querySelectorAll(".btn-details").forEach(btn => {
             btn.addEventListener("click", () => {
                 const doc = btn.dataset.doc;
-                const apr = currentAnalysis.aprendices.find(x => x.documento === doc);
+                const currentData = activeFichaId === "ALL" 
+                    ? multiAnalysisData.consolidado 
+                    : multiAnalysisData.detalle_fichas[activeFichaId];
+                const apr = currentData.aprendices.find(x => x.documento === doc);
                 if (apr) openAprendizModal(apr);
             });
         });
     }
 
     document.getElementById("search-aprendiz").addEventListener("input", () => {
-        if (currentAnalysis) renderAprendicesTable(currentAnalysis.aprendices);
+        if (multiAnalysisData) {
+            const currentData = activeFichaId === "ALL" ? multiAnalysisData.consolidado : multiAnalysisData.detalle_fichas[activeFichaId];
+            renderAprendicesTable(currentData.aprendices, activeFichaId === "ALL");
+        }
     });
 
     document.querySelectorAll("#apr-status-filter .filter-chip").forEach(btn => {
@@ -450,14 +537,17 @@ document.addEventListener("DOMContentLoaded", () => {
             document.querySelectorAll("#apr-status-filter .filter-chip").forEach(b => b.classList.remove("active"));
             btn.classList.add("active");
             currentAprFilter = btn.dataset.filter;
-            if (currentAnalysis) renderAprendicesTable(currentAnalysis.aprendices);
+            if (multiAnalysisData) {
+                const currentData = activeFichaId === "ALL" ? multiAnalysisData.consolidado : multiAnalysisData.detalle_fichas[activeFichaId];
+                renderAprendicesTable(currentData.aprendices, activeFichaId === "ALL");
+            }
         });
     });
 
     // Modal de Aprendiz
     function openAprendizModal(apr) {
         modalAprName.textContent = apr.nombre;
-        modalAprDoc.textContent = `Documento: ${apr.documento}  |  Estado Sofía: ${apr.estado_sofia}  |  Avance: ${apr.porcentaje_avance}%`;
+        modalAprDoc.textContent = `Ficha: ${apr.ficha || '-'}  |  Documento: ${apr.documento}  |  Estado: ${apr.estado_sofia}  |  Avance: ${apr.porcentaje_avance}%`;
 
         let html = `
             <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; text-align: center;">
@@ -478,7 +568,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         if (apr.raps_deficientes_lista && apr.raps_deficientes_lista.length > 0) {
             html += `
-                <div class="modal-section-title" style="color: var(--color-red);">⚠️ RAPs Deficientes (Urgente Concertar Plan de Mejoramiento)</div>
+                <div class="modal-section-title" style="color: var(--color-red);">⚠️ RAPs Deficientes (Urgente Plan de Mejoramiento)</div>
                 <ul class="modal-raps-list">
                     ${apr.raps_deficientes_lista.map(r => `<li><strong>${escapeHtml(r)}</strong></li>`).join("")}
                 </ul>
@@ -506,11 +596,16 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // -------------------------------------------------------------
-    // PESTAÑA 3: DESGLOSE POR COMPETENCIA
+    // PESTAÑA: DESGLOSE POR COMPETENCIA
     // -------------------------------------------------------------
     function renderCompetenciasGrid(competencias) {
         const container = document.getElementById("competencias-container");
         container.innerHTML = "";
+
+        if (!competencias || competencias.length === 0) {
+            container.innerHTML = `<div style="text-align: center; color: var(--text-muted); padding: 2rem;">Selecciona una ficha específica para ver el desglose de competencias asociadas.</div>`;
+            return;
+        }
 
         competencias.forEach(c => {
             const card = document.createElement("div");
@@ -555,11 +650,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
-    // PESTAÑA 4: MATRIZ APRENDIZ X RAP
+    // PESTAÑA: MATRIZ APRENDIZ X RAP
     // -------------------------------------------------------------
     function renderMatrix(matriz) {
         const thead = document.getElementById("thead-matrix");
         const tbody = document.getElementById("tbody-matrix");
+
+        if (!matriz || !matriz.filas || matriz.filas.length === 0) {
+            thead.innerHTML = "";
+            tbody.innerHTML = `<tr><td style="text-align:center; padding: 2rem; color: var(--text-muted);">Selecciona una ficha específica en la barra superior para explorar la matriz cruzada de aprendices vs RAPs.</td></tr>`;
+            return;
+        }
 
         // Encabezados
         let headerHtml = `<tr><th>Documento</th><th>Nombre Aprendiz</th>`;
@@ -601,6 +702,88 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     });
 
+    // -------------------------------------------------------------
+    // EXPORTACIÓN A EXCEL
+    // -------------------------------------------------------------
+    btnExportExcel.addEventListener("click", () => {
+        window.location.href = "/api/export";
+        showToast("Generando y descargando informe oficial consolidado en Excel...");
+    });
+
+    // -------------------------------------------------------------
+    // FILTROS DE ESTADO Y UMBRALES
+    // -------------------------------------------------------------
+    function setupStateChips(states) {
+        stateChipsContainer.innerHTML = "";
+        selectedStates.clear();
+
+        if (!states || states.length === 0) {
+            controlsBar.style.display = "none";
+            return;
+        }
+
+        controlsBar.style.display = "flex";
+
+        states.forEach(st => {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.className = "state-chip";
+            chip.textContent = st;
+
+            if (st.includes("FORMACI") || states.length === 1) {
+                chip.classList.add("active");
+                selectedStates.add(st);
+            }
+
+            chip.addEventListener("click", () => {
+                if (selectedStates.has(st)) {
+                    if (selectedStates.size > 1) {
+                        selectedStates.delete(st);
+                        chip.classList.remove("active");
+                    } else {
+                        showToast("Debe mantener al menos un estado seleccionado", true);
+                    }
+                } else {
+                    selectedStates.add(st);
+                    chip.classList.add("active");
+                }
+            });
+
+            stateChipsContainer.appendChild(chip);
+        });
+    }
+
+    btnApplyFilters.addEventListener("click", async () => {
+        if (!multiAnalysisData) return;
+        showToast("Recalculando avance de todas las fichas...");
+
+        const filter_estados = Array.from(selectedStates);
+        const umbral_verde = parseFloat(inputUmbralVerde.value) || 80.0;
+        const umbral_amarillo = parseFloat(inputUmbralAmarillo.value) || 50.0;
+
+        try {
+            const res = await fetch("/api/analyze", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    filter_estados,
+                    umbral_verde,
+                    umbral_amarillo
+                })
+            });
+
+            const data = await res.json();
+            if (!data.success) {
+                throw new Error(data.error);
+            }
+
+            setMultiAnalysisData(data.analysis);
+            showToast("Métricas y semáforos recalculados exitosamente");
+        } catch (err) {
+            showToast(err.message, true);
+        }
+    });
+
     function escapeHtml(text) {
         if (!text) return "";
         return text.toString()
@@ -611,7 +794,6 @@ document.addEventListener("DOMContentLoaded", () => {
             .replace(/'/g, "&#039;");
     }
 
-    // Cargar automáticamente el archivo de prueba al iniciar
+    // Cargar automáticamente el conjunto de fichas de prueba al iniciar
     loadSampleData(false);
 });
-

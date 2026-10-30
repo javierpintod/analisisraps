@@ -1132,3 +1132,100 @@ body {
         display: none;
     }
 }
+
+/* ==========================================================================
+   Estilos Multi-Ficha Navigator & Tabla Comparativa
+   ========================================================================== */
+.fichas-nav-container {
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 0.5rem;
+    background: rgba(15, 23, 42, 0.7);
+    border: 1px solid rgba(57, 169, 0, 0.3);
+}
+
+.fichas-nav-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.fichas-nav-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--sena-primary);
+}
+
+.fichas-count-badge {
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.2rem 0.65rem;
+    background: rgba(57, 169, 0, 0.15);
+    border: 1px solid rgba(57, 169, 0, 0.4);
+    border-radius: var(--radius-pill);
+    color: #FFFFFF;
+}
+
+.fichas-pills-row {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.ficha-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.6rem;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-pill);
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.ficha-pill:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #FFFFFF;
+    border-color: rgba(255, 255, 255, 0.25);
+    transform: translateY(-1px);
+}
+
+.ficha-pill.active {
+    background: rgba(57, 169, 0, 0.25);
+    border-color: var(--sena-primary);
+    color: #FFFFFF;
+    font-weight: 600;
+    box-shadow: 0 4px 12px var(--sena-primary-glow);
+}
+
+.pill-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 0.15rem 0.45rem;
+    border-radius: var(--radius-pill);
+    background: rgba(0, 0, 0, 0.3);
+}
+
+.btn-inspect-ficha {
+    background: rgba(57, 169, 0, 0.15);
+    border: 1px solid rgba(57, 169, 0, 0.4);
+    color: var(--sena-primary);
+    padding: 0.3rem 0.65rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.btn-inspect-ficha:hover {
+    background: var(--sena-primary);
+    color: #FFFFFF;
+}
+

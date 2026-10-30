@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Sistema de Análisis de Avance Real de Grupos de Formación SENA frente a Resultados de Aprendizaje (RAPs).">
-    <title>SENA | Análisis de Avance Real de RAPs</title>
+    <meta name="description" content="Sistema de Análisis de Avance Real Multi-Ficha de Grupos de Formación SENA frente a Resultados de Aprendizaje (RAPs).">
+    <title>SENA | Análisis de Avance Real Multi-Ficha</title>
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -23,8 +23,8 @@
                     </svg>
                     <span>SENA COLOMBIA</span>
                 </div>
-                <h1 class="brand-title">Analizador de Avance por RAPs</h1>
-                <p class="brand-subtitle">Evaluación de Juicios y Cumplimiento de Resultados de Aprendizaje</p>
+                <h1 class="brand-title">Analizador de Avance Multi-Ficha por RAPs</h1>
+                <p class="brand-subtitle">Auditoría simultánea de grupos de formación y seguimiento a resultados de aprendizaje</p>
             </div>
             <div class="header-actions">
                 <button id="btn-load-sample" class="btn btn-secondary">
@@ -32,7 +32,7 @@
                         <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
                         <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
                     </svg>
-                    <span>Recargar Reporte SofiaPlus</span>
+                    <span>Recargar Múltiples Fichas</span>
                 </button>
                 <button id="btn-export-excel" class="btn btn-primary" disabled>
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -40,7 +40,7 @@
                         <polyline points="7 10 12 15 17 10"/>
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
-                    <span>Exportar Excel Oficial</span>
+                    <span>Exportar Consolidado Excel</span>
                 </button>
             </div>
         </div>
@@ -50,7 +50,7 @@
         <!-- Panel de Carga y Configuración -->
         <section class="upload-section glass-panel">
             <div class="drop-zone" id="drop-zone">
-                <input type="file" id="file-input" accept=".xlsx, .xls, .csv" hidden>
+                <input type="file" id="file-input" multiple accept=".xlsx, .xls, .csv" hidden>
                 <div class="drop-icon-wrapper">
                     <svg class="drop-icon" width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -59,12 +59,12 @@
                     </svg>
                 </div>
                 <div class="drop-text">
-                    <h3>Arrastra el archivo de la Ficha o haz clic para subir</h3>
-                    <p>Formatos compatibles: Reportes de SofíaPlus / ZAJUNA en <strong>.xlsx, .xls o .csv</strong></p>
+                    <h3>Arrastra uno o múltiples archivos de Fichas aquí</h3>
+                    <p>Puedes seleccionar y subir varios archivos a la vez en formatos <strong>.xlsx, .xls (SofiaPlus) o .csv</strong></p>
                 </div>
                 <div class="drop-file-info" id="file-info" style="display: none;">
                     <span class="file-name" id="file-name-text"></span>
-                    <button class="btn-clear" id="btn-clear-file" title="Quitar archivo">✕</button>
+                    <button class="btn-clear" id="btn-clear-file" title="Quitar archivos">✕</button>
                 </div>
             </div>
 
@@ -100,17 +100,28 @@
                     <path d="M7 10l3 3 7-7"/>
                 </svg>
             </div>
-            <h2>Sube el archivo de juicios evaluativos de tu grupo de formación</h2>
-            <p>O prueba inmediatamente con el botón <strong>"Cargar Ficha Demo (ADSO)"</strong> para ver la auditoría pedagógica en acción.</p>
+            <h2>Sube los archivos de tus fichas de formación SENA</h2>
+            <p>La plataforma analizará todas las fichas en simultáneo, mostrando rankings comparativos y diagnósticos por grupo.</p>
         </div>
 
         <!-- Dashboard de Resultados -->
         <div id="dashboard-content" style="display: none;">
             
-            <!-- Barra de Identificación de la Ficha -->
+            <!-- Barra de Selección de Ficha (Multi-Ficha Navigator) -->
+            <div class="fichas-nav-container glass-panel" id="fichas-nav-container">
+                <div class="fichas-nav-header">
+                    <span class="fichas-nav-title">🎯 Seleccionar Ficha / Vista Activa:</span>
+                    <span class="fichas-count-badge" id="fichas-count-badge">1 Ficha</span>
+                </div>
+                <div class="fichas-pills-row" id="fichas-pills-row">
+                    <!-- Pills inyectados por JS -->
+                </div>
+            </div>
+
+            <!-- Barra de Identificación de la Ficha Activa -->
             <div class="group-banner glass-panel">
                 <div class="banner-item">
-                    <span class="banner-label">FICHA DE CARACTERIZACIÓN</span>
+                    <span class="banner-label">VISTA / FICHA</span>
                     <span class="banner-value" id="meta-ficha">-</span>
                 </div>
                 <div class="banner-divider"></div>
@@ -120,12 +131,12 @@
                 </div>
                 <div class="banner-divider"></div>
                 <div class="banner-item">
-                    <span class="banner-label">APRENDICES EN FORMACIÓN</span>
+                    <span class="banner-label">APRENDICES ACTIVOS</span>
                     <span class="banner-value highlight" id="meta-aprendices">-</span>
                 </div>
                 <div class="banner-divider"></div>
                 <div class="banner-item">
-                    <span class="banner-label">TOTAL RAPS ASOCIADOS</span>
+                    <span class="banner-label">RAPS ASOCIADOS</span>
                     <span class="banner-value" id="meta-raps">-</span>
                 </div>
             </div>
@@ -135,9 +146,9 @@
                 <!-- KPI 1: Avance Real Global con Anillo Radial -->
                 <div class="kpi-card glass-panel kpi-hero">
                     <div class="kpi-hero-content">
-                        <span class="kpi-tag">Métrica Central</span>
-                        <h3 class="kpi-title">NIVEL DE AVANCE REAL DEL GRUPO</h3>
-                        <p class="kpi-desc">Porcentaje de RAPs aprobados sobre el total global de evaluaciones esperadas.</p>
+                        <span class="kpi-tag" id="kpi-tag-context">Métrica de la Vista</span>
+                        <h3 class="kpi-title">NIVEL DE AVANCE REAL</h3>
+                        <p class="kpi-desc">Porcentaje de juicios aprobados (A) sobre el universo total de evaluaciones esperadas.</p>
                         <div class="kpi-numbers">
                             <span class="kpi-main-number" id="kpi-avance-real">0%</span>
                             <span class="kpi-sub" id="kpi-evaluaciones-detalle">0 / 0 juicios aprobados</span>
@@ -156,7 +167,7 @@
                 <div class="kpi-card glass-panel">
                     <div class="kpi-header">
                         <span class="kpi-badge badge-green">Calidad Evaluativa</span>
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#39A900" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#10B981" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
                     </div>
                     <div class="kpi-body">
                         <div class="kpi-value-lg" id="kpi-eficacia">0%</div>
@@ -205,7 +216,7 @@
                                 <span class="count-txt">Óptimos</span>
                             </div>
                         </div>
-                        <span class="kpi-subtext">Distribución según porcentaje de aprobación del grupo</span>
+                        <span class="kpi-subtext">Clasificación por porcentaje de avance</span>
                     </div>
                 </div>
             </section>
@@ -213,26 +224,66 @@
             <!-- Sistema de Pestañas de Análisis Detallado -->
             <section class="tabs-section glass-panel">
                 <nav class="tabs-header">
-                    <button class="tab-btn active" data-tab="tab-raps">
+                    <!-- Pestaña Ranking Fichas (solo visible en modo Multi-Ficha) -->
+                    <button class="tab-btn active" id="tab-btn-fichas" data-tab="tab-fichas">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></svg>
+                        <span>Ranking y Comparativo de Fichas (<span id="tab-count-fichas">0</span>)</span>
+                    </button>
+                    <button class="tab-btn" id="tab-btn-raps" data-tab="tab-raps">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                         <span>Semáforo de RAPs (<span id="tab-count-raps">0</span>)</span>
                     </button>
-                    <button class="tab-btn" data-tab="tab-aprendices">
+                    <button class="tab-btn" id="tab-btn-aprendices" data-tab="tab-aprendices">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
                         <span>Diagnóstico por Aprendiz (<span id="tab-count-apr">0</span>)</span>
                     </button>
-                    <button class="tab-btn" data-tab="tab-competencias">
+                    <button class="tab-btn" id="tab-btn-competencias" data-tab="tab-competencias">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
                         <span>Avance por Competencia</span>
                     </button>
-                    <button class="tab-btn" data-tab="tab-matriz">
+                    <button class="tab-btn" id="tab-btn-matriz" data-tab="tab-matriz">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
                         <span>Matriz Aprendiz vs RAP</span>
                     </button>
                 </nav>
 
+                <!-- PESTAÑA MULTI-FICHA: RANKING Y COMPARATIVO -->
+                <div class="tab-content active" id="tab-fichas">
+                    <div class="tab-toolbar">
+                        <div class="search-input-wrapper">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                            <input type="text" id="search-ficha" placeholder="Buscar por número de ficha o programa...">
+                        </div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted);">
+                            Haz clic en cualquier ficha para abrir su auditoría pedagógica detallada.
+                        </div>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table" id="table-fichas-comparativo">
+                            <thead>
+                                <tr>
+                                    <th>Ficha</th>
+                                    <th>Programa de Formación</th>
+                                    <th>Aprendices</th>
+                                    <th>RAPs</th>
+                                    <th>% Avance Real</th>
+                                    <th>Eficacia</th>
+                                    <th>Cobertura</th>
+                                    <th>RAPs Críticos</th>
+                                    <th>En Riesgo</th>
+                                    <th>Semáforo</th>
+                                    <th>Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbody-fichas-comparativo">
+                                <!-- Filas inyectadas por JS -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <!-- PESTAÑA 1: SEMÁFORO DE RAPS -->
-                <div class="tab-content active" id="tab-raps">
+                <div class="tab-content" id="tab-raps">
                     <div class="tab-toolbar">
                         <div class="search-input-wrapper">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -268,6 +319,7 @@
                         <table class="data-table" id="table-aprendices">
                             <thead>
                                 <tr>
+                                    <th>Ficha</th>
                                     <th>Aprendiz</th>
                                     <th>Documento</th>
                                     <th>Estado Sofía</th>
