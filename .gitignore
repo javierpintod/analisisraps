@@ -1,0 +1,31 @@
+# .gitignore genérico
+
+# Entornos y secretos
+.env
+.env.*
+!.env.example
+
+# Archivos de sistema operativo
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+._*
+
+# Editores e IDEs
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Archivos temporales y de depuración
+*.log
+*.tmp
+*.bak
+*.swp
+*~
