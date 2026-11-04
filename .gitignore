@@ -59,7 +59,9 @@ ENV/
 env/
 
 
-# Base de datos SQLite local (generada automáticamente por Liquibase)
+# Base de datos SQLite local (generada automáticamente por Liquibase) y bandeja local de correos
 *.db
 *.db-journal
 *.db-wal
+data/outbox/*.eml
+.coverage
