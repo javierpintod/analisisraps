@@ -13,6 +13,13 @@ document.addEventListener("DOMContentLoaded", () => {
     let currentAprFilter = "all";
     let currentUser = null;
     let currentClaims = null;
+    let currentPermisos = [];
+    let regPage = 1;
+    let regPages = 1;
+
+    function can(permiso) {
+        return currentPermisos.includes(permiso);
+    }
 
     // Elementos del DOM
     const dropZone = document.getElementById("drop-zone");
@@ -90,9 +97,13 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    function updateSessionHeader(user, claims) {
+    function updateSessionHeader(user, claims, permisos) {
         currentUser = user;
         currentClaims = claims;
+        currentPermisos = permisos || [];
+        document.querySelectorAll(".perm-registros-ver").forEach(el => el.style.display = can("registros.ver") ? "" : "none");
+        document.querySelectorAll(".perm-auditoria-ver").forEach(el => el.style.display = can("auditoria.ver") ? "" : "none");
+        if (dropZone) dropZone.style.display = can("analisis.cargar") ? "" : "none";
         if (user) {
             userSessionName.textContent = user.nombre || user.username;
             userSessionRole.textContent = user.rol || "INSTRUCTOR";
@@ -114,6 +125,11 @@ document.addEventListener("DOMContentLoaded", () => {
             setToken(null);
             showLoginScreen("Tu sesión ha expirado o requiere autenticación JWT.");
             throw new Error("Sesión no autenticada (401 Unauthorized)");
+        }
+        if (response.status === 403) {
+            let msg = "Acceso denegado (403)";
+            try { msg = (await response.json()).error || msg; } catch (e) { /* sin cuerpo JSON */ }
+            throw new Error(msg);
         }
         return response;
     }
@@ -146,7 +162,7 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             setToken(data.token);
-            updateSessionHeader(data.user, data.claims);
+            updateSessionHeader(data.user, data.claims, data.permisos);
             loginPassword.value = "";
             showToast(`Bienvenido, ${data.user.nombre} (Token JWT activo)`);
             await loadSampleData(false);
@@ -196,7 +212,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await apiFetch("/api/auth/me");
             const data = await res.json();
             if (data.success && data.authenticated) {
-                updateSessionHeader(data.user, data.claims);
+                updateSessionHeader(data.user, data.claims, data.permisos);
                 await loadSampleData(false);
             } else {
                 showLoginScreen();
@@ -279,7 +295,9 @@ document.addEventListener("DOMContentLoaded", () => {
             setupStateChips(data.states);
             renderDashboard(data.analysis);
             await loadHistoryData();
-            showToast("¡Análisis completado y guardado en el histórico!");
+            loadCargas();
+            const recMsg = data.records_info ? ` ${data.records_info.mensaje}` : "";
+            showToast(`¡Análisis completado y guardado en el histórico!${recMsg}`);
         } catch (err) {
             console.error(err);
             showToast(err.message, true);
@@ -317,6 +335,7 @@ document.addEventListener("DOMContentLoaded", () => {
             setupStateChips(data.states);
             renderDashboard(data.analysis);
             await loadHistoryData();
+            loadCargas();
             if (showNotification) showToast("Reporte cargado con éxito");
 
         } catch (err) {
@@ -804,7 +823,7 @@ document.addEventListener("DOMContentLoaded", () => {
                         <td>
                             <div style="display: flex; gap: 0.4rem;">
                                 <button class="btn-details btn-load-snap" data-id="${item.id}">Cargar</button>
-                                <button class="btn-details btn-del-snap" data-id="${item.id}" style="border-color: rgba(239,68,68,0.4); color: #F87171;">✕</button>
+                                ${can("historico.eliminar") ? `<button class="btn-details btn-del-snap" data-id="${item.id}" style="border-color: rgba(239,68,68,0.4); color: #F87171;">✕</button>` : ""}
                             </div>
                         </td>
                     `;
@@ -902,6 +921,255 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
+    // PESTAÑA 6: REGISTROS EXCEL ALMACENADOS
+    // -------------------------------------------------------------
+    function fillSelect(selectId, values, allLabel, labelFn) {
+        const sel = document.getElementById(selectId);
+        const current = sel.value;
+        sel.innerHTML = `<option value="">${allLabel}</option>` +
+            values.map(v => {
+                const val = typeof v === "object" ? v.value : v;
+                const lbl = labelFn ? labelFn(v) : val;
+                return `<option value="${escapeHtml(val)}">${escapeHtml(lbl)}</option>`;
+            }).join("");
+        sel.value = current;
+    }
+
+    async function loadCargas() {
+        if (!can("registros.ver")) return;
+        try {
+            const res = await apiFetch("/api/registros/cargas");
+            const data = await res.json();
+            if (!data.success) return;
+
+            document.getElementById("tab-count-reg").textContent = data.total_registros.toLocaleString();
+            fillSelect("reg-f-ficha", data.fichas, "Todas las fichas");
+            fillSelect("reg-f-estado", data.estados, "Todos los estados");
+            fillSelect("reg-f-carga", data.cargas.map(c => ({ value: String(c.id), c })), "Todas las cargas",
+                v => `#${v.c.id} - ${v.c.nombre_archivo} (${v.c.fecha_carga})`);
+
+            const tbody = document.getElementById("tbody-cargas");
+            if (!data.cargas.length) {
+                tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding:1.5rem; color: var(--text-muted);">Aún no hay archivos almacenados.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = data.cargas.map(c => `
+                <tr>
+                    <td style="font-weight:700;">#${c.id}</td>
+                    <td style="font-size:0.8rem;">${escapeHtml(c.fecha_carga)}</td>
+                    <td style="font-size:0.8rem;">${escapeHtml(c.nombre_archivo)}</td>
+                    <td>${escapeHtml(c.ficha_codigo || "-")}</td>
+                    <td>${c.total_filas.toLocaleString()}</td>
+                    <td>${escapeHtml(c.username)}</td>
+                    <td class="hash-short" title="${escapeHtml(c.hash_sha256)}">${escapeHtml(c.hash_sha256.slice(0, 16))}…</td>
+                    <td>
+                        <div style="display:flex; gap:0.4rem;">
+                            <button class="btn-details btn-carga-filtrar" data-id="${c.id}">Ver filas</button>
+                            <button class="btn-details btn-carga-verificar" data-id="${c.id}">🛡️ Integridad</button>
+                            ${can("registros.eliminar") ? `<button class="btn-details btn-carga-eliminar" data-id="${c.id}" style="border-color: rgba(239,68,68,0.4); color: #F87171;">✕</button>` : ""}
+                        </div>
+                    </td>
+                </tr>
+            `).join("");
+
+            tbody.querySelectorAll(".btn-carga-filtrar").forEach(btn => btn.addEventListener("click", () => {
+                document.getElementById("reg-f-carga").value = btn.dataset.id;
+                loadRegistros(1);
+            }));
+
+            tbody.querySelectorAll(".btn-carga-verificar").forEach(btn => btn.addEventListener("click", async () => {
+                try {
+                    const r = await apiFetch(`/api/registros/cargas/${btn.dataset.id}/integridad`);
+                    const v = await r.json();
+                    if (!v.success) throw new Error(v.error);
+                    if (v.integro) {
+                        showToast(`✅ Carga #${v.carga_id} íntegra: ${v.total_encontrado} filas verificadas con SHA-256`);
+                    } else {
+                        showToast(`⚠️ Carga #${v.carga_id}: ${v.registros_alterados.length} filas alteradas, ${v.filas_faltantes} faltantes`, true);
+                    }
+                } catch (e) {
+                    showToast(e.message, true);
+                }
+            }));
+
+            tbody.querySelectorAll(".btn-carga-eliminar").forEach(btn => btn.addEventListener("click", async () => {
+                if (!confirm(`¿Eliminar la carga #${btn.dataset.id} y todos sus registros? Esta acción queda registrada en la bitácora.`)) return;
+                try {
+                    const r = await apiFetch("/api/registros/cargas/delete", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ id: parseInt(btn.dataset.id, 10) })
+                    });
+                    const d = await r.json();
+                    if (d.success) {
+                        showToast(`Carga #${btn.dataset.id} eliminada`);
+                        await loadCargas();
+                        loadRegistros(1);
+                    }
+                } catch (e) {
+                    showToast(e.message, true);
+                }
+            }));
+        } catch (err) {
+            console.error("Error cargando cargas:", err);
+        }
+    }
+
+    async function loadRegistros(page = 1) {
+        if (!can("registros.ver")) return;
+        const params = new URLSearchParams({ page: String(page), page_size: "50" });
+        const map = {
+            carga_id: "reg-f-carga", ficha: "reg-f-ficha", estado: "reg-f-estado", juicio: "reg-f-juicio",
+            documento: "reg-f-documento", rap: "reg-f-rap", q: "reg-f-q"
+        };
+        Object.entries(map).forEach(([k, id]) => {
+            const v = document.getElementById(id).value.trim();
+            if (v) params.set(k, v);
+        });
+
+        try {
+            const res = await apiFetch(`/api/registros?${params.toString()}`);
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
+
+            regPage = data.page;
+            regPages = data.pages;
+            document.getElementById("reg-sum-total").textContent = data.total.toLocaleString();
+            document.getElementById("reg-sum-apr").textContent = data.aprendices_distintos.toLocaleString();
+            document.getElementById("reg-sum-a").textContent = data.resumen_juicios.A.toLocaleString();
+            document.getElementById("reg-sum-d").textContent = data.resumen_juicios.D.toLocaleString();
+            document.getElementById("reg-sum-p").textContent = data.resumen_juicios.P.toLocaleString();
+            document.getElementById("reg-page-info").textContent = `Página ${data.page} de ${data.pages}`;
+            document.getElementById("btn-reg-prev").disabled = data.page <= 1;
+            document.getElementById("btn-reg-next").disabled = data.page >= data.pages;
+
+            const tbody = document.getElementById("tbody-registros");
+            if (!data.items.length) {
+                tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; padding:1.5rem; color: var(--text-muted);">No hay registros que coincidan con los filtros.</td></tr>`;
+                return;
+            }
+            tbody.innerHTML = data.items.map(r => {
+                const j = r.juicio_normalizado;
+                const badge = j === "A" ? "badge-a" : (j === "D" ? "badge-d" : "badge-p");
+                return `
+                    <tr>
+                        <td style="font-size:0.78rem;">#${r.carga_id} / ${r.fila_numero}</td>
+                        <td>${escapeHtml(r.ficha_codigo || "-")}</td>
+                        <td>${escapeHtml(r.documento || "-")}</td>
+                        <td class="apr-name-col">${escapeHtml(r.nombre_aprendiz || "-")}</td>
+                        <td style="font-size:0.75rem;">${escapeHtml(r.estado_aprendiz || "-")}</td>
+                        <td style="font-size:0.75rem; max-width:220px;">${escapeHtml(r.competencia || "-")}</td>
+                        <td style="font-size:0.75rem; max-width:280px;">${escapeHtml(r.rap || "-")}</td>
+                        <td><span class="${badge}" title="Original: ${escapeHtml(r.juicio_original || "vacío")}">${j}</span></td>
+                        <td style="font-size:0.75rem;">${escapeHtml(r.fecha_juicio || "-")}</td>
+                        <td style="font-size:0.75rem;">${escapeHtml(r.instructor || "-")}</td>
+                        <td><button class="btn-details btn-reg-detalle" data-id="${r.id}">Fila original</button></td>
+                    </tr>
+                `;
+            }).join("");
+
+            tbody.querySelectorAll(".btn-reg-detalle").forEach(btn => btn.addEventListener("click", () => openRegistroModal(btn.dataset.id)));
+        } catch (err) {
+            showToast(err.message, true);
+        }
+    }
+
+    async function openRegistroModal(id) {
+        try {
+            const res = await apiFetch(`/api/registros/${id}`);
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
+            const r = data.registro;
+            modalAprName.textContent = `Registro #${r.id} — Carga #${r.carga_id}, fila ${r.fila_numero}`;
+            modalAprDoc.textContent = `${r.nombre_aprendiz || "-"} | Doc: ${r.documento || "-"} | Integridad: ${r.integridad_ok ? "✅ Verificada (SHA-256)" : "⚠️ ALTERADA"}`;
+            const rows = Object.entries(r.datos_originales).map(([k, v]) =>
+                `<tr><td style="font-weight:600; color: var(--text-secondary);">${escapeHtml(k)}</td><td>${escapeHtml(v === null ? "" : v)}</td></tr>`
+            ).join("");
+            modalAprContent.innerHTML = `
+                <div class="modal-section-title" style="margin-top:0;">Columnas originales del Excel</div>
+                <div class="table-responsive"><table class="data-table"><tbody>${rows}</tbody></table></div>
+                <div class="modal-section-title">Hash de integridad de la fila</div>
+                <div class="jwt-code-block">${escapeHtml(r.hash_fila)}</div>
+            `;
+            modalBackdrop.style.display = "flex";
+        } catch (e) {
+            showToast(e.message, true);
+        }
+    }
+
+    document.getElementById("btn-reg-buscar").addEventListener("click", () => loadRegistros(1));
+    document.getElementById("btn-reg-limpiar").addEventListener("click", () => {
+        ["reg-f-carga", "reg-f-ficha", "reg-f-estado", "reg-f-juicio", "reg-f-documento", "reg-f-rap", "reg-f-q"]
+            .forEach(id => document.getElementById(id).value = "");
+        loadRegistros(1);
+    });
+    document.getElementById("btn-reg-prev").addEventListener("click", () => { if (regPage > 1) loadRegistros(regPage - 1); });
+    document.getElementById("btn-reg-next").addEventListener("click", () => { if (regPage < regPages) loadRegistros(regPage + 1); });
+    ["reg-f-documento", "reg-f-rap", "reg-f-q"].forEach(id => {
+        document.getElementById(id).addEventListener("keydown", e => { if (e.key === "Enter") loadRegistros(1); });
+    });
+
+    // -------------------------------------------------------------
+    // PESTAÑA 7: SEGURIDAD Y AUDITORÍA
+    // -------------------------------------------------------------
+    async function loadAuditoria() {
+        if (!can("auditoria.ver")) return;
+        const evento = document.getElementById("aud-f-evento").value;
+        const params = new URLSearchParams({ limit: "200" });
+        if (evento) params.set("evento", evento);
+        try {
+            const res = await apiFetch(`/api/seguridad/auditoria?${params.toString()}`);
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error);
+
+            const badge = document.getElementById("chain-badge");
+            if (data.cadena.valid) {
+                badge.className = "status-badge status-optimo";
+                badge.textContent = `🟢 Cadena de auditoría íntegra (${data.cadena.total_eventos} eventos verificados)`;
+            } else {
+                badge.className = "status-badge status-critico";
+                badge.textContent = `🔴 Cadena ROTA en evento #${data.cadena.evento_roto_id}: ${data.cadena.motivo}`;
+            }
+
+            const rbac = data.rbac;
+            const roles = rbac.roles.map(r => r.codigo);
+            let html = `<thead><tr><th>Permiso</th><th>Descripción</th>${roles.map(r => `<th style="text-align:center;">${escapeHtml(r)}</th>`).join("")}</tr></thead><tbody>`;
+            rbac.permisos.forEach(p => {
+                html += `<tr><td style="font-family:monospace; color:#38BDF8;">${escapeHtml(p.codigo)}</td><td style="font-size:0.8rem;">${escapeHtml(p.descripcion)}</td>`;
+                roles.forEach(r => {
+                    const ok = (rbac.matriz[r] || []).includes(p.codigo);
+                    html += `<td class="${ok ? "rbac-yes" : "rbac-no"}">${ok ? "✔" : "—"}</td>`;
+                });
+                html += `</tr>`;
+            });
+            document.getElementById("table-rbac").innerHTML = html + "</tbody>";
+
+            const tbody = document.getElementById("tbody-auditoria");
+            tbody.innerHTML = data.eventos.map(ev => {
+                const cls = ev.resultado === "OK" ? "status-optimo" : (ev.resultado === "DENEGADO" || ev.resultado === "ERROR" ? "status-critico" : "status-avance");
+                return `
+                    <tr title="${escapeHtml(ev.detalle_json)}">
+                        <td>${ev.id}</td>
+                        <td style="font-size:0.78rem;">${escapeHtml(ev.fecha)}</td>
+                        <td style="font-family:monospace; font-size:0.78rem;">${escapeHtml(ev.evento)}</td>
+                        <td>${escapeHtml(ev.username)}</td>
+                        <td style="font-size:0.75rem;">${escapeHtml(ev.rol || "-")}</td>
+                        <td style="font-size:0.75rem;">${escapeHtml(ev.recurso || "-")}</td>
+                        <td><span class="status-badge ${cls}">${escapeHtml(ev.resultado)}</span></td>
+                        <td style="font-size:0.75rem;">${escapeHtml(ev.ip_origen || "-")}</td>
+                        <td class="hash-short" title="${escapeHtml(ev.hash_evento)}">${escapeHtml(ev.hash_evento.slice(0, 12))}…</td>
+                    </tr>
+                `;
+            }).join("") || `<tr><td colspan="9" style="text-align:center; padding:1.5rem; color: var(--text-muted);">Sin eventos.</td></tr>`;
+        } catch (err) {
+            showToast(err.message, true);
+        }
+    }
+
+    document.getElementById("btn-aud-refresh").addEventListener("click", loadAuditoria);
+    document.getElementById("aud-f-evento").addEventListener("change", loadAuditoria);
+
+    // -------------------------------------------------------------
     // CONTROL DE PESTAÑAS (TABS)
     // -------------------------------------------------------------
     document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -916,6 +1184,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (tabId === "tab-historico") {
                 loadHistoryData();
+            } else if (tabId === "tab-registros") {
+                loadCargas();
+                loadRegistros(1);
+            } else if (tabId === "tab-seguridad") {
+                loadAuditoria();
             }
         });
     });

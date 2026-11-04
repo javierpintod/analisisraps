@@ -1282,3 +1282,76 @@ body {
     overflow-y: auto;
     margin-bottom: 1rem;
 }
+
+/* ==========================================================================
+   Registros Excel y Seguridad
+   ========================================================================== */
+.reg-filters {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.reg-filters select,
+.reg-filters input,
+.reg-select {
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background: rgba(15, 23, 42, 0.7);
+    color: #fff;
+    font-size: 0.82rem;
+    outline: none;
+}
+
+.reg-filters input { min-width: 150px; }
+.reg-filters #reg-f-q { flex: 1; min-width: 240px; }
+
+.reg-filters select:focus,
+.reg-filters input:focus {
+    border-color: var(--sena-primary);
+}
+
+.reg-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    margin-bottom: 1rem;
+}
+
+.reg-summary .count-pill {
+    flex-direction: row;
+    gap: 0.45rem;
+    padding: 0.35rem 0.8rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    display: inline-flex;
+    align-items: baseline;
+}
+
+.reg-pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin: 1rem 0 2rem 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.section-subtitle {
+    margin: 0.5rem 0 0.75rem 0;
+    font-size: 0.95rem;
+    color: var(--text-secondary);
+}
+
+.hash-short {
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.rbac-yes { color: var(--color-green); font-weight: 700; text-align: center; }
+.rbac-no { color: var(--text-muted); text-align: center; }

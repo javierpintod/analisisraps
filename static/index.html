@@ -239,6 +239,14 @@
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>
                         <span>Histórico y Liquibase (<span id="tab-count-hist">0</span>)</span>
                     </button>
+                    <button class="tab-btn perm-registros-ver" data-tab="tab-registros">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/></svg>
+                        <span>Registros Excel (<span id="tab-count-reg">0</span>)</span>
+                    </button>
+                    <button class="tab-btn perm-auditoria-ver" data-tab="tab-seguridad" style="display: none;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                        <span>Seguridad y Auditoría</span>
+                    </button>
                 </nav>
 
                 <!-- PESTAÑA 1: SEMÁFORO DE RAPS -->
@@ -401,6 +409,130 @@
                             <tbody id="tbody-liquibase">
                                 <!-- Filas inyectadas por JS -->
                             </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- PESTAÑA 6: REGISTROS EXCEL ALMACENADOS -->
+                <div class="tab-content" id="tab-registros">
+                    <div class="reg-filters">
+                        <select id="reg-f-carga" title="Archivo de origen"><option value="">Todas las cargas</option></select>
+                        <select id="reg-f-ficha" title="Ficha"><option value="">Todas las fichas</option></select>
+                        <select id="reg-f-estado" title="Estado del aprendiz"><option value="">Todos los estados</option></select>
+                        <select id="reg-f-juicio" title="Juicio evaluativo">
+                            <option value="">Todos los juicios</option>
+                            <option value="A">A - Aprobado</option>
+                            <option value="D">D - Deficiente</option>
+                            <option value="P">P - Por evaluar</option>
+                        </select>
+                        <input type="text" id="reg-f-documento" placeholder="Documento...">
+                        <input type="text" id="reg-f-rap" placeholder="Texto del RAP...">
+                        <input type="text" id="reg-f-q" placeholder="Búsqueda libre (nombre, instructor, competencia)...">
+                        <button id="btn-reg-buscar" class="btn btn-primary btn-sm">🔎 Consultar</button>
+                        <button id="btn-reg-limpiar" class="btn btn-outline btn-sm">Limpiar</button>
+                    </div>
+
+                    <div class="reg-summary" id="reg-summary">
+                        <span class="count-pill"><span class="count-num" id="reg-sum-total">0</span><span class="count-txt">Registros</span></span>
+                        <span class="count-pill"><span class="count-num" id="reg-sum-apr">0</span><span class="count-txt">Aprendices</span></span>
+                        <span class="count-pill pill-green"><span class="count-num" id="reg-sum-a">0</span><span class="count-txt">A</span></span>
+                        <span class="count-pill pill-red"><span class="count-num" id="reg-sum-d">0</span><span class="count-txt">D</span></span>
+                        <span class="count-pill pill-amber"><span class="count-num" id="reg-sum-p">0</span><span class="count-txt">P</span></span>
+                    </div>
+
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Carga / Fila</th>
+                                    <th>Ficha</th>
+                                    <th>Documento</th>
+                                    <th>Aprendiz</th>
+                                    <th>Estado</th>
+                                    <th>Competencia</th>
+                                    <th>RAP</th>
+                                    <th>Juicio</th>
+                                    <th>Fecha Juicio</th>
+                                    <th>Instructor</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbody-registros"></tbody>
+                        </table>
+                    </div>
+                    <div class="reg-pagination">
+                        <button id="btn-reg-prev" class="btn btn-outline btn-sm">◀ Anterior</button>
+                        <span id="reg-page-info">Página 1 de 1</span>
+                        <button id="btn-reg-next" class="btn btn-outline btn-sm">Siguiente ▶</button>
+                    </div>
+
+                    <h4 class="section-subtitle">📁 Archivos Cargados (huella SHA-256 e integridad por fila)</h4>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Carga</th>
+                                    <th>Fecha</th>
+                                    <th>Archivo</th>
+                                    <th>Ficha</th>
+                                    <th>Filas</th>
+                                    <th>Cargado por</th>
+                                    <th>SHA-256</th>
+                                    <th>Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbody-cargas"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- PESTAÑA 7: SEGURIDAD Y AUDITORÍA -->
+                <div class="tab-content" id="tab-seguridad">
+                    <div class="tab-toolbar" style="flex-wrap: wrap; gap: 1rem;">
+                        <span id="chain-badge" class="status-badge status-avance">Verificando cadena de auditoría...</span>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <select id="aud-f-evento" class="reg-select">
+                                <option value="">Todos los eventos</option>
+                                <option>LOGIN_OK</option>
+                                <option>LOGIN_FALLIDO</option>
+                                <option>LOGIN_BLOQUEADO</option>
+                                <option>CUENTA_BLOQUEADA</option>
+                                <option>LOGOUT</option>
+                                <option>ACCESO_DENEGADO</option>
+                                <option>CARGA_ARCHIVO</option>
+                                <option>CARGA_ELIMINAR</option>
+                                <option>CONSULTA_REGISTROS</option>
+                                <option>VERIFICAR_INTEGRIDAD</option>
+                                <option>EXPORTAR_EXCEL</option>
+                                <option>HISTORICO_GUARDAR</option>
+                                <option>HISTORICO_ELIMINAR</option>
+                            </select>
+                            <button id="btn-aud-refresh" class="btn btn-outline btn-sm">↻ Actualizar</button>
+                        </div>
+                    </div>
+
+                    <h4 class="section-subtitle">🛡️ Matriz de Roles y Permisos (RBAC)</h4>
+                    <div class="table-responsive" style="margin-bottom: 1.5rem;">
+                        <table class="data-table" id="table-rbac"></table>
+                    </div>
+
+                    <h4 class="section-subtitle">📜 Bitácora de Seguridad (append-only, encadenada con SHA-256)</h4>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Fecha</th>
+                                    <th>Evento</th>
+                                    <th>Usuario</th>
+                                    <th>Rol</th>
+                                    <th>Recurso</th>
+                                    <th>Resultado</th>
+                                    <th>IP</th>
+                                    <th>Hash</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tbody-auditoria"></tbody>
                         </table>
                     </div>
                 </div>

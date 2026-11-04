@@ -20,6 +20,7 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from database import DEFAULT_DB_PATH, LiquibaseRunner
+from security import SecurityService
 
 JWT_SECRET_KEY = os.environ.get(
     "SENA_JWT_SECRET",
@@ -28,6 +29,8 @@ JWT_SECRET_KEY = os.environ.get(
 JWT_ALGORITHM = "HS256"
 JWT_ISSUER = "sena-analisisraps"
 JWT_EXPIRATION_SECONDS = 8 * 3600  # 8 horas de jornada académica
+MAX_INTENTOS_FALLIDOS = 5
+MINUTOS_BLOQUEO = 15
 
 
 def _b64url_encode(data: bytes) -> str:
@@ -110,9 +113,10 @@ def verify_password(password: str, expected_hash: str, salt: str) -> bool:
 class AuthService:
     """Servicio de autenticación de usuarios y control de sesiones JWT respaldado en SQLite."""
 
-    def __init__(self, db_path: str = DEFAULT_DB_PATH):
+    def __init__(self, db_path: str = DEFAULT_DB_PATH, security: Optional[SecurityService] = None):
         self.db_path = db_path
         LiquibaseRunner(db_path=self.db_path).update()
+        self.security = security or SecurityService(db_path=self.db_path)
         self._seed_default_users()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -159,8 +163,44 @@ class AuthService:
                 (clean_user,)
             ).fetchone()
 
-            if not row or not verify_password(password, row["password_hash"], row["salt"]):
+            if not row:
+                self.security.log_event("LOGIN_FALLIDO", username=clean_user, recurso="/api/auth/login",
+                                        resultado="DENEGADO", detalle={"motivo": "usuario_inexistente"}, ip=ip)
                 raise ValueError("Usuario o contraseña incorrectos.")
+
+            now_dt = datetime.now()
+            if row["bloqueado_hasta"]:
+                bloqueado_hasta = datetime.strptime(row["bloqueado_hasta"], "%Y-%m-%d %H:%M:%S")
+                if bloqueado_hasta > now_dt:
+                    self.security.log_event("LOGIN_BLOQUEADO", username=row["username"], usuario_id=row["id"],
+                                            rol=row["rol"], recurso="/api/auth/login", resultado="DENEGADO",
+                                            detalle={"bloqueado_hasta": row["bloqueado_hasta"]}, ip=ip)
+                    raise ValueError(
+                        f"Cuenta bloqueada temporalmente por intentos fallidos. Intente después de {row['bloqueado_hasta']}."
+                    )
+
+            if not verify_password(password, row["password_hash"], row["salt"]):
+                intentos = int(row["intentos_fallidos"] or 0) + 1
+                if intentos >= MAX_INTENTOS_FALLIDOS:
+                    hasta = (now_dt + timedelta(minutes=MINUTOS_BLOQUEO)).strftime("%Y-%m-%d %H:%M:%S")
+                    conn.execute(
+                        "UPDATE usuarios SET intentos_fallidos = 0, bloqueado_hasta = ? WHERE id = ?;",
+                        (hasta, row["id"])
+                    )
+                    conn.commit()
+                    self.security.log_event("CUENTA_BLOQUEADA", username=row["username"], usuario_id=row["id"],
+                                            rol=row["rol"], recurso="/api/auth/login", resultado="DENEGADO",
+                                            detalle={"bloqueado_hasta": hasta, "intentos": intentos}, ip=ip)
+                    raise ValueError(
+                        f"Demasiados intentos fallidos. Cuenta bloqueada {MINUTOS_BLOQUEO} minutos (hasta {hasta})."
+                    )
+                conn.execute("UPDATE usuarios SET intentos_fallidos = ? WHERE id = ?;", (intentos, row["id"]))
+                conn.commit()
+                self.security.log_event("LOGIN_FALLIDO", username=row["username"], usuario_id=row["id"],
+                                        rol=row["rol"], recurso="/api/auth/login", resultado="DENEGADO",
+                                        detalle={"intentos": intentos}, ip=ip)
+                restantes = MAX_INTENTOS_FALLIDOS - intentos
+                raise ValueError(f"Usuario o contraseña incorrectos. Intentos restantes antes del bloqueo: {restantes}.")
 
             now_ts = int(time.time())
             exp_ts = now_ts + JWT_EXPIRATION_SECONDS
@@ -183,7 +223,7 @@ class AuthService:
             exp_str = datetime.fromtimestamp(exp_ts).strftime("%Y-%m-%d %H:%M:%S")
 
             conn.execute(
-                "UPDATE usuarios SET ultimo_acceso = ? WHERE id = ?;",
+                "UPDATE usuarios SET ultimo_acceso = ?, intentos_fallidos = 0, bloqueado_hasta = NULL WHERE id = ?;",
                 (now_str, row["id"])
             )
             conn.execute(
@@ -195,6 +235,9 @@ class AuthService:
                 (row["id"], row["username"], jti, now_str, exp_str, ip)
             )
             conn.commit()
+
+            self.security.log_event("LOGIN_OK", username=row["username"], usuario_id=row["id"], rol=row["rol"],
+                                    recurso="/api/auth/login", detalle={"jti": jti}, ip=ip)
 
             return {
                 "token": token,
@@ -208,6 +251,7 @@ class AuthService:
                     "rol": row["rol"],
                     "correo": row["correo"]
                 },
+                "permisos": self.security.get_permissions(row["rol"]),
                 "claims": payload
             }
         finally:
@@ -238,7 +282,7 @@ class AuthService:
                 conn.close()
         return payload
 
-    def logout(self, token: str) -> bool:
+    def logout(self, token: str, ip: str = "") -> bool:
         """Revoca el token JWT marcando su identificador único (jti) en la tabla de auditoría."""
         try:
             payload = decode_jwt(token)
@@ -252,9 +296,12 @@ class AuthService:
                     (jti,)
                 )
                 conn.commit()
-                return cur.rowcount > 0
+                revoked = cur.rowcount > 0
             finally:
                 conn.close()
+            self.security.log_from_claims(payload, "LOGOUT", recurso="/api/auth/logout",
+                                          detalle={"jti": jti, "revocado": revoked}, ip=ip)
+            return revoked
         except Exception:
             return False
 

@@ -1,10 +1,12 @@
 """
 Batería de Pruebas Automatizadas de Calidad (QA) para el Analizador de RAPs SENA.
-Ejecuta validaciones unitarias, de integración, base de datos histórica y migraciones Liquibase.
+Ejecuta validaciones unitarias, de integración, base de datos histórica, migraciones Liquibase,
+autenticación JWT, marco de seguridad (RBAC + auditoría encadenada) y consulta de registros Excel.
 """
 
 import copy
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -17,7 +19,9 @@ from sena_processor import clean_string, normalize_juicio, auto_detect_columns, 
 from export_utils import create_excel_report
 from sample_data import generate_sample_excel
 from database import LiquibaseRunner, SenaHistoryRepository
-from auth import AuthService, encode_jwt, decode_jwt
+from auth import AuthService
+from security import SecurityService
+from excel_records import ExcelRecordRepository
 
 
 class TestNormalizacion(unittest.TestCase):
@@ -170,7 +174,7 @@ class TestExportacionExcel(unittest.TestCase):
 
 
 class TestLiquibaseYBaseDatosHistorica(unittest.TestCase):
-    """Pruebas de control de cambios Liquibase y persistencia histórica en SQLite."""
+    """Pruebas de control de cambios Liquibase, seguridad RBAC, JWT y registros Excel en SQLite."""
 
     def setUp(self):
         self.tmp_dir = tempfile.TemporaryDirectory()
@@ -183,17 +187,17 @@ class TestLiquibaseYBaseDatosHistorica(unittest.TestCase):
         runner = LiquibaseRunner(db_path=self.test_db)
         res = runner.update()
         self.assertEqual(res["status"], "success")
-        self.assertEqual(res["applied_count"], 10)
+        self.assertEqual(res["applied_count"], 16)
 
         # Segunda ejecución debe ser idempotente (0 aplicados)
         res2 = runner.update()
         self.assertEqual(res2["applied_count"], 0)
-        self.assertEqual(res2["previously_executed"], 10)
+        self.assertEqual(res2["previously_executed"], 16)
 
         # Verificar estado
         st = runner.status()
         self.assertTrue(st["up_to_date"])
-        self.assertEqual(st["executed_count"], 10)
+        self.assertEqual(st["executed_count"], 16)
 
         # Probar rollback del último changeset y reaplicación
         rb = runner.rollback(count=1)
@@ -263,6 +267,53 @@ class TestLiquibaseYBaseDatosHistorica(unittest.TestCase):
         self.assertTrue(auth.logout(token))
         with self.assertRaises(ValueError):
             auth.verify_token(token)
+
+    def test_marco_seguridad_y_almacenamiento_registros_excel(self):
+        sec = SecurityService(db_path=self.test_db)
+
+        # 1. RBAC: Instructor puede ver registros pero no eliminar ni ver auditoría
+        self.assertTrue(sec.has_permission("INSTRUCTOR", "registros.ver"))
+        self.assertFalse(sec.has_permission("INSTRUCTOR", "registros.eliminar"))
+        self.assertTrue(sec.has_permission("COORDINADOR", "registros.eliminar"))
+        self.assertTrue(sec.has_permission("COORDINADOR", "auditoria.ver"))
+
+        # 2. Bitácora encadenada con SHA-256 e inmutabilidad por triggers
+        sec.log_event("TEST_EVENTO_1", username="coordinador", rol="COORDINADOR", recurso="recurso_1")
+        sec.log_event("TEST_EVENTO_2", username="instructor", rol="INSTRUCTOR", recurso="recurso_2")
+        chain = sec.verify_chain()
+        self.assertTrue(chain["valid"])
+        self.assertEqual(chain["total_eventos"], 2)
+
+        conn = sqlite3.connect(self.test_db)
+        with self.assertRaises(sqlite3.IntegrityError):
+            conn.execute("DELETE FROM auditoria_eventos WHERE id = 1;")
+        conn.close()
+
+        # 3. Almacenamiento y consulta fila a fila de registros Excel
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "data", "muestra_sena_juicios_evaluativos.xlsx")
+        with open(sample_path, "rb") as f:
+            content = f.read()
+
+        analyzer = SenaAnalyzer(content, "muestra.xlsx")
+        analysis = analyzer.run_analysis(filter_estados=["EN FORMACIÓN"])
+
+        rec_repo = ExcelRecordRepository(db_path=self.test_db)
+        store_res = rec_repo.store_upload(
+            content, "muestra.xlsx", analyzer.headers, analyzer.raw_data, analyzer.column_mapping,
+            meta=analysis["meta"]
+        )
+        self.assertTrue(store_res["stored"])
+        self.assertEqual(store_res["total_filas"], 250)
+
+        # Consulta filtrada por juicio A
+        q_res = rec_repo.query({"ficha": "2714589", "juicio": "A"}, page=1, page_size=20)
+        self.assertGreater(q_res["total"], 100)
+        self.assertEqual(len(q_res["items"]), 20)
+
+        # Verificación de integridad SHA-256 por fila
+        integ = rec_repo.verify_integrity(store_res["carga_id"])
+        self.assertTrue(integ["integro"])
+        self.assertEqual(integ["total_encontrado"], 250)
 
 
 if __name__ == "__main__":
