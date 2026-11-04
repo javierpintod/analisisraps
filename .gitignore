@@ -58,3 +58,8 @@ venv/
 ENV/
 env/
 
+
+# Base de datos SQLite local (generada automáticamente por Liquibase)
+*.db
+*.db-journal
+*.db-wal

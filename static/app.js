@@ -1,14 +1,18 @@
 /**
  * SENA - Sistema de Análisis de Avance por RAPs
- * Controlador Frontend Interactivo en JavaScript Vanilla
+ * Controlador Frontend Interactivo con Autenticación JWT (RFC 7519 HS256) y SQLite/Liquibase
  */
 
 document.addEventListener("DOMContentLoaded", () => {
+    const JWT_STORAGE_KEY = "sena_jwt_token";
+
     // Estado global de la aplicación
     let currentAnalysis = null;
     let selectedStates = new Set();
     let currentRapFilter = "all";
     let currentAprFilter = "all";
+    let currentUser = null;
+    let currentClaims = null;
 
     // Elementos del DOM
     const dropZone = document.getElementById("drop-zone");
@@ -25,6 +29,20 @@ document.addEventListener("DOMContentLoaded", () => {
     const btnApplyFilters = document.getElementById("btn-apply-filters");
     const inputUmbralVerde = document.getElementById("input-umbral-verde");
     const inputUmbralAmarillo = document.getElementById("input-umbral-amarillo");
+    const btnSaveSnapshot = document.getElementById("btn-save-snapshot");
+    const inputHistObs = document.getElementById("input-hist-obs");
+
+    // Elementos de Login y Sesión JWT
+    const loginBackdrop = document.getElementById("login-backdrop");
+    const loginForm = document.getElementById("login-form");
+    const loginUsername = document.getElementById("login-username");
+    const loginPassword = document.getElementById("login-password");
+    const loginError = document.getElementById("login-error");
+    const userSessionBar = document.getElementById("user-session-bar");
+    const userSessionName = document.getElementById("user-session-name");
+    const userSessionRole = document.getElementById("user-session-role");
+    const btnShowJwt = document.getElementById("btn-show-jwt");
+    const btnLogout = document.getElementById("btn-logout");
 
     // Modal
     const modalBackdrop = document.getElementById("modal-backdrop");
@@ -44,6 +62,148 @@ document.addEventListener("DOMContentLoaded", () => {
         setTimeout(() => {
             toast.style.display = "none";
         }, 3500);
+    }
+
+    // -------------------------------------------------------------
+    // GESTIÓN DE TOKEN JWT Y CLIENTE HTTP AUTENTICADO
+    // -------------------------------------------------------------
+    function getToken() {
+        return localStorage.getItem(JWT_STORAGE_KEY);
+    }
+
+    function setToken(token) {
+        if (token) {
+            localStorage.setItem(JWT_STORAGE_KEY, token);
+        } else {
+            localStorage.removeItem(JWT_STORAGE_KEY);
+        }
+    }
+
+    function showLoginScreen(errorMsg = "") {
+        userSessionBar.style.display = "none";
+        loginBackdrop.style.display = "flex";
+        if (errorMsg) {
+            loginError.textContent = errorMsg;
+            loginError.style.display = "block";
+        } else {
+            loginError.style.display = "none";
+        }
+    }
+
+    function updateSessionHeader(user, claims) {
+        currentUser = user;
+        currentClaims = claims;
+        if (user) {
+            userSessionName.textContent = user.nombre || user.username;
+            userSessionRole.textContent = user.rol || "INSTRUCTOR";
+            userSessionBar.style.display = "inline-flex";
+            loginBackdrop.style.display = "none";
+        } else {
+            userSessionBar.style.display = "none";
+        }
+    }
+
+    async function apiFetch(url, options = {}) {
+        const token = getToken();
+        const headers = Object.assign({}, options.headers || {});
+        if (token) {
+            headers["Authorization"] = `Bearer ${token}`;
+        }
+        const response = await fetch(url, Object.assign({}, options, { headers }));
+        if (response.status === 401) {
+            setToken(null);
+            showLoginScreen("Tu sesión ha expirado o requiere autenticación JWT.");
+            throw new Error("Sesión no autenticada (401 Unauthorized)");
+        }
+        return response;
+    }
+
+    // Eventos del formulario de Login
+    document.querySelectorAll(".btn-demo-cred").forEach(btn => {
+        btn.addEventListener("click", () => {
+            loginUsername.value = btn.dataset.user;
+            loginPassword.value = btn.dataset.pass;
+            loginError.style.display = "none";
+        });
+    });
+
+    loginForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        loginError.style.display = "none";
+
+        const username = loginUsername.value.trim();
+        const password = loginPassword.value;
+
+        try {
+            const res = await fetch("/api/auth/login", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ username, password })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                throw new Error(data.error || "Credenciales inválidas");
+            }
+
+            setToken(data.token);
+            updateSessionHeader(data.user, data.claims);
+            loginPassword.value = "";
+            showToast(`Bienvenido, ${data.user.nombre} (Token JWT activo)`);
+            await loadSampleData(false);
+        } catch (err) {
+            loginError.textContent = err.message;
+            loginError.style.display = "block";
+        }
+    });
+
+    btnLogout.addEventListener("click", async () => {
+        try {
+            await apiFetch("/api/auth/logout", { method: "POST" });
+        } catch (e) {
+            // Ignorar si ya expiró
+        }
+        setToken(null);
+        currentUser = null;
+        currentClaims = null;
+        resetAppState();
+        showLoginScreen();
+        showToast("Sesión cerrada y token JWT revocado");
+    });
+
+    btnShowJwt.addEventListener("click", () => {
+        const token = getToken();
+        if (!token) return;
+        modalAprName.textContent = "🔑 Token de Autenticación JWT Activo (RFC 7519)";
+        modalAprDoc.textContent = `Usuario: ${currentUser ? currentUser.username : '-'}  |  Algoritmo: HS256  |  Estado: FIRMADO Y VÁLIDO`;
+
+        const payloadPretty = JSON.stringify(currentClaims || {}, null, 2);
+        modalAprContent.innerHTML = `
+            <div class="modal-section-title" style="color: var(--color-green); margin-top: 0;">Token Bearer Codificado (Header.Payload.Signature)</div>
+            <div class="jwt-code-block">${escapeHtml(token)}</div>
+            <div class="modal-section-title" style="color: #38BDF8;">Claims Decodificados del Payload (Verificados con HMAC-SHA256)</div>
+            <pre class="jwt-code-block" style="color: #A7F3D0; white-space: pre-wrap;">${escapeHtml(payloadPretty)}</pre>
+        `;
+        modalBackdrop.style.display = "flex";
+    });
+
+    async function checkInitialAuth() {
+        const token = getToken();
+        if (!token) {
+            showLoginScreen();
+            return;
+        }
+        try {
+            const res = await apiFetch("/api/auth/me");
+            const data = await res.json();
+            if (data.success && data.authenticated) {
+                updateSessionHeader(data.user, data.claims);
+                await loadSampleData(false);
+            } else {
+                showLoginScreen();
+            }
+        } catch (err) {
+            showLoginScreen();
+        }
     }
 
     // -------------------------------------------------------------
@@ -98,11 +258,11 @@ document.addEventListener("DOMContentLoaded", () => {
         fileNameText.textContent = file.name;
         fileInfo.style.display = "inline-flex";
 
-        showToast("Procesando archivo SENA...");
+        showToast("Procesando archivo SENA y registrando en BD...");
 
         try {
             const base64 = await readFileAsBase64(file);
-            const res = await fetch("/api/upload", {
+            const res = await apiFetch("/api/upload", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -118,7 +278,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
             setupStateChips(data.states);
             renderDashboard(data.analysis);
-            showToast("¡Análisis de RAPs completado exitosamente!");
+            await loadHistoryData();
+            showToast("¡Análisis completado y guardado en el histórico!");
         } catch (err) {
             console.error(err);
             showToast(err.message, true);
@@ -144,7 +305,7 @@ document.addEventListener("DOMContentLoaded", () => {
     async function loadSampleData(showNotification = true) {
         if (showNotification) showToast("Cargando archivo de prueba SENA...");
         try {
-            const res = await fetch("/api/sample");
+            const res = await apiFetch("/api/sample");
             const data = await res.json();
             if (!data.success) {
                 throw new Error(data.error || "No se pudo cargar el archivo demo");
@@ -155,6 +316,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
             setupStateChips(data.states);
             renderDashboard(data.analysis);
+            await loadHistoryData();
             if (showNotification) showToast("Reporte cargado con éxito");
 
         } catch (err) {
@@ -186,7 +348,6 @@ document.addEventListener("DOMContentLoaded", () => {
             chip.className = "state-chip";
             chip.textContent = st;
 
-            // Por defecto seleccionar 'EN FORMACIÓN' o similares
             if (st.includes("FORMACI") || states.length === 1) {
                 chip.classList.add("active");
                 selectedStates.add(st);
@@ -219,7 +380,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const umbral_amarillo = parseFloat(inputUmbralAmarillo.value) || 50.0;
 
         try {
-            const res = await fetch("/api/analyze", {
+            const res = await apiFetch("/api/analyze", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -242,10 +403,11 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     // -------------------------------------------------------------
-    // EXPORTAR REPORTE EN EXCEL
+    // EXPORTAR REPORTE EN EXCEL (CON TOKEN JWT)
     // -------------------------------------------------------------
     btnExportExcel.addEventListener("click", () => {
-        window.location.href = "/api/export";
+        const token = getToken();
+        window.location.href = `/api/export?token=${encodeURIComponent(token || "")}`;
         showToast("Generando y descargando informe oficial en Excel...");
     });
 
@@ -258,13 +420,11 @@ document.addEventListener("DOMContentLoaded", () => {
         dashboardContent.style.display = "block";
         btnExportExcel.disabled = false;
 
-        // Metadatos de Ficha
         document.getElementById("meta-ficha").textContent = analysis.meta.ficha;
         document.getElementById("meta-programa").textContent = analysis.meta.programa;
         document.getElementById("meta-aprendices").textContent = `${analysis.meta.total_aprendices_analizados} Aprendices`;
         document.getElementById("meta-raps").textContent = `${analysis.meta.total_raps} RAPs`;
 
-        // KPIs
         const kpis = analysis.kpis;
         const pctAvance = kpis.porcentaje_avance_real;
         
@@ -272,7 +432,6 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("kpi-evaluaciones-detalle").textContent = 
             `${kpis.total_aprobados.toLocaleString()} / ${kpis.total_evaluaciones_posibles.toLocaleString()} juicios aprobados`;
 
-        // Anillo Radial SVG (perímetro con r=50 es 2*pi*50 = 314.15)
         const gaugeCircle = document.getElementById("gauge-fill-circle");
         const gaugeText = document.getElementById("gauge-text");
         const circumference = 314.15;
@@ -280,28 +439,23 @@ document.addEventListener("DOMContentLoaded", () => {
         gaugeCircle.style.strokeDashoffset = Math.max(0, offset);
         gaugeText.textContent = `${Math.round(pctAvance)}%`;
 
-        // KPI Eficacia sobre Evaluados
         document.getElementById("kpi-eficacia").textContent = `${kpis.porcentaje_aprobacion_evaluados}%`;
         document.getElementById("bar-eficacia").style.width = `${Math.min(100, kpis.porcentaje_aprobacion_evaluados)}%`;
         document.getElementById("kpi-eficacia-sub").textContent = 
             `${kpis.total_aprobados} Aprobados vs ${kpis.total_deficientes} Deficientes`;
 
-        // KPI Cobertura
         document.getElementById("kpi-cobertura").textContent = `${kpis.porcentaje_cobertura_evaluativa}%`;
         document.getElementById("bar-cobertura").style.width = `${Math.min(100, kpis.porcentaje_cobertura_evaluativa)}%`;
         document.getElementById("kpi-cobertura-sub").textContent = 
             `${(kpis.total_aprobados + kpis.total_deficientes)} con juicio emitido, ${kpis.total_por_evaluar} pendientes`;
 
-        // Semáforo RAPs Pills
         document.getElementById("count-raps-criticos").textContent = kpis.raps_criticos;
         document.getElementById("count-raps-avance").textContent = kpis.raps_en_avance;
         document.getElementById("count-raps-optimos").textContent = kpis.raps_optimos;
 
-        // Contadores en pestañas
         document.getElementById("tab-count-raps").textContent = analysis.raps.length;
         document.getElementById("tab-count-apr").textContent = analysis.aprendices.length;
 
-        // Renderizado de las 4 secciones
         renderRapsList(analysis.raps);
         renderAprendicesTable(analysis.aprendices);
         renderCompetenciasGrid(analysis.competencias);
@@ -431,7 +585,6 @@ document.addEventListener("DOMContentLoaded", () => {
             tbody.appendChild(tr);
         });
 
-        // Eventos para abrir modal
         tbody.querySelectorAll(".btn-details").forEach(btn => {
             btn.addEventListener("click", () => {
                 const doc = btn.dataset.doc;
@@ -561,7 +714,6 @@ document.addEventListener("DOMContentLoaded", () => {
         const thead = document.getElementById("thead-matrix");
         const tbody = document.getElementById("tbody-matrix");
 
-        // Encabezados
         let headerHtml = `<tr><th>Documento</th><th>Nombre Aprendiz</th>`;
         matriz.raps.forEach((rap, idx) => {
             headerHtml += `<th title="${escapeHtml(rap)}">RAP ${idx + 1}</th>`;
@@ -569,7 +721,6 @@ document.addEventListener("DOMContentLoaded", () => {
         headerHtml += `</tr>`;
         thead.innerHTML = headerHtml;
 
-        // Filas
         let bodyHtml = "";
         matriz.filas.forEach(f => {
             bodyHtml += `<tr>`;
@@ -587,6 +738,170 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     // -------------------------------------------------------------
+    // PESTAÑA 5: HISTÓRICO DE CORTES Y LIQUIBASE
+    // -------------------------------------------------------------
+    async function loadHistoryData() {
+        try {
+            const res = await apiFetch("/api/history");
+            const data = await res.json();
+            if (!data.success) return;
+
+            document.getElementById("tab-count-hist").textContent = data.items.length;
+
+            // 1. Renderizar estado Liquibase
+            const lb = data.liquibase;
+            const lbBadge = document.getElementById("liquibase-badge");
+            if (lb && lb.up_to_date) {
+                lbBadge.className = "status-badge status-optimo";
+                lbBadge.textContent = `🟢 Liquibase Al Día (${lb.executed_count} changesets aplicados)`;
+            } else if (lb) {
+                lbBadge.className = "status-badge status-avance";
+                lbBadge.textContent = `🟡 Liquibase (${lb.pending_count} pendientes)`;
+            }
+
+            const tbodyLb = document.getElementById("tbody-liquibase");
+            tbodyLb.innerHTML = "";
+            if (lb && lb.executed) {
+                lb.executed.forEach(cs => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td style="font-weight: 700;">#${cs.ORDEREXECUTED}</td>
+                        <td style="font-family: monospace; color: #38BDF8;">${escapeHtml(cs.ID)}</td>
+                        <td>${escapeHtml(cs.AUTHOR)}</td>
+                        <td style="font-size: 0.78rem; color: var(--text-muted);">${escapeHtml(cs.FILENAME)}</td>
+                        <td><span style="font-size: 0.72rem; padding: 0.15rem 0.45rem; border-radius: 4px; background: rgba(57,169,0,0.15); color: #4ADE80;">${escapeHtml(cs.LABELS || 'v1.0')}</span></td>
+                        <td style="font-size: 0.8rem;">${escapeHtml(cs.COMMENTS || '-')}</td>
+                        <td style="font-family: monospace; font-size: 0.75rem; color: var(--text-muted);">${escapeHtml(cs.MD5SUM)}</td>
+                        <td style="font-size: 0.78rem;">${escapeHtml(cs.DATEEXECUTED)}</td>
+                        <td><span class="status-badge status-optimo">${escapeHtml(cs.EXECTYPE)}</span></td>
+                    `;
+                    tbodyLb.appendChild(tr);
+                });
+            }
+
+            // 2. Renderizar tabla de cortes históricos
+            const tbodyHist = document.getElementById("tbody-historico");
+            tbodyHist.innerHTML = "";
+            if (!data.items || data.items.length === 0) {
+                tbodyHist.innerHTML = `<tr><td colspan="10" style="text-align: center; padding: 1.5rem; color: var(--text-muted);">No hay cortes históricos registrados aún.</td></tr>`;
+            } else {
+                data.items.forEach(item => {
+                    const tr = document.createElement("tr");
+                    const delta = item.delta_avance || 0;
+                    const deltaStr = delta > 0 ? `+${delta}% ▲` : (delta < 0 ? `${delta}% ▼` : `0.0% ▬`);
+                    const deltaColor = delta > 0 ? "var(--color-green)" : (delta < 0 ? "var(--color-red)" : "var(--text-muted)");
+
+                    tr.innerHTML = `
+                        <td style="font-weight: 700;">#${item.id}</td>
+                        <td style="font-size: 0.8rem;">${escapeHtml(item.fecha_analisis)}</td>
+                        <td><strong>${escapeHtml(item.ficha_codigo)}</strong></td>
+                        <td style="font-size: 0.8rem;">${escapeHtml(item.archivo_origen)}</td>
+                        <td>${item.total_aprendices_analizados}</td>
+                        <td style="font-weight: 700; color: var(--color-green);">${item.pct_avance_real}%</td>
+                        <td style="font-weight: 600; color: ${deltaColor};">${deltaStr}</td>
+                        <td>${item.cambios_juicios_count > 0 ? `<span class="status-badge status-avance">${item.cambios_juicios_count} cambios</span>` : `<span style="color: var(--text-muted); font-size: 0.78rem;">Sin cambios</span>`}</td>
+                        <td style="font-size: 0.8rem; color: var(--text-secondary);">${escapeHtml(item.observaciones || '-')}</td>
+                        <td>
+                            <div style="display: flex; gap: 0.4rem;">
+                                <button class="btn-details btn-load-snap" data-id="${item.id}">Cargar</button>
+                                <button class="btn-details btn-del-snap" data-id="${item.id}" style="border-color: rgba(239,68,68,0.4); color: #F87171;">✕</button>
+                            </div>
+                        </td>
+                    `;
+                    tbodyHist.appendChild(tr);
+                });
+
+                tbodyHist.querySelectorAll(".btn-load-snap").forEach(btn => {
+                    btn.addEventListener("click", async () => {
+                        const id = btn.dataset.id;
+                        try {
+                            const r = await apiFetch(`/api/history/${id}`);
+                            const snapData = await r.json();
+                            if (!snapData.success) throw new Error(snapData.error);
+                            renderDashboard(snapData.analysis);
+                            fileNameText.textContent = `Corte Histórico #${id} - ${snapData.snapshot.archivo_origen} (${snapData.snapshot.fecha_analisis})`;
+                            fileInfo.style.display = "inline-flex";
+                            showToast(`Corte histórico #${id} restaurado en pantalla`);
+                        } catch (e) {
+                            showToast(e.message, true);
+                        }
+                    });
+                });
+
+                tbodyHist.querySelectorAll(".btn-del-snap").forEach(btn => {
+                    btn.addEventListener("click", async () => {
+                        const id = btn.dataset.id;
+                        try {
+                            const r = await apiFetch("/api/history/delete", {
+                                method: "POST",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ id: parseInt(id, 10) })
+                            });
+                            const resDel = await r.json();
+                            if (resDel.success) {
+                                await loadHistoryData();
+                                showToast(`Corte #${id} eliminado del histórico`);
+                            }
+                        } catch (e) {
+                            showToast(e.message, true);
+                        }
+                    });
+                });
+            }
+
+            // 3. Renderizar cambios de juicio recientes si existen
+            const changesSection = document.getElementById("juicio-changes-section");
+            const tbodyChanges = document.getElementById("tbody-cambios-juicios");
+            tbodyChanges.innerHTML = "";
+            if (data.recent_juicio_changes && data.recent_juicio_changes.length > 0) {
+                changesSection.style.display = "block";
+                data.recent_juicio_changes.forEach(ch => {
+                    const tr = document.createElement("tr");
+                    tr.innerHTML = `
+                        <td>#${ch.analisis_id}</td>
+                        <td>${escapeHtml(ch.ficha_codigo)}</td>
+                        <td>${escapeHtml(ch.documento)}</td>
+                        <td class="apr-name-col">${escapeHtml(ch.nombre_aprendiz)}</td>
+                        <td style="font-size: 0.78rem;">${escapeHtml(ch.rap)}</td>
+                        <td>
+                            <span class="badge-${ch.juicio_anterior.toLowerCase()}">${escapeHtml(ch.juicio_anterior)}</span>
+                            ➔
+                            <span class="badge-${ch.juicio_nuevo.toLowerCase()}">${escapeHtml(ch.juicio_nuevo)}</span>
+                        </td>
+                        <td style="font-size: 0.78rem; color: var(--text-muted);">${escapeHtml(ch.fecha_deteccion)}</td>
+                    `;
+                    tbodyChanges.appendChild(tr);
+                });
+            } else {
+                changesSection.style.display = "none";
+            }
+        } catch (err) {
+            console.error("Error cargando histórico:", err);
+        }
+    }
+
+    if (btnSaveSnapshot) {
+        btnSaveSnapshot.addEventListener("click", async () => {
+            if (!currentAnalysis) return;
+            const obs = inputHistObs.value.trim() || "Corte guardado manualmente por el instructor";
+            try {
+                const res = await apiFetch("/api/history/save", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ observaciones: obs })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error);
+                inputHistObs.value = "";
+                await loadHistoryData();
+                showToast(`Corte #${data.history_record.analisis_id} guardado en SQLite exitosamente`);
+            } catch (err) {
+                showToast(err.message, true);
+            }
+        });
+    }
+
+    // -------------------------------------------------------------
     // CONTROL DE PESTAÑAS (TABS)
     // -------------------------------------------------------------
     document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -598,6 +913,10 @@ document.addEventListener("DOMContentLoaded", () => {
             const tabId = btn.dataset.tab;
             const targetContent = document.getElementById(tabId);
             if (targetContent) targetContent.classList.add("active");
+
+            if (tabId === "tab-historico") {
+                loadHistoryData();
+            }
         });
     });
 
@@ -611,7 +930,6 @@ document.addEventListener("DOMContentLoaded", () => {
             .replace(/'/g, "&#039;");
     }
 
-    // Cargar automáticamente el archivo de prueba al iniciar
-    loadSampleData(false);
+    // Verificar autenticación JWT al iniciar la aplicación
+    checkInitialAuth();
 });
-

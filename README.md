@@ -40,6 +40,13 @@ Aplicación en Python diseñada para instructores, coordinadores académicos y c
 8. **Conjunto de Datos de Prueba Incluido (Demo ADSO)**:
    - Viene con un botón para cargar inmediatamente un grupo de prueba realista del programa **Tecnólogo en Análisis y Desarrollo de Software (ADSO - Ficha 2714589)** con 25 aprendices y 10 RAPs auténticos.
 
+9. **Base de Datos Histórica (SQLite) y Control de Cambios (Liquibase)**:
+   - Almacena cortes históricos de evaluaciones por ficha, calculando la variación ($\Delta$ de avance) y detectando cambios individuales de juicios (`P ➔ A`, `D ➔ A`) entre reportes.
+   - Esquema versionado mediante **Liquibase** (`liquibase.properties` y `db/changelog/db.changelog-master.xml`) con soporte de `status`, `update` y `rollback`.
+
+10. **Autenticación y Seguridad con JWT (RFC 7519 HS256)**:
+    - Inicio de sesión por roles (`INSTRUCTOR` y `COORDINADOR`), contraseñas cifradas con `PBKDF2-HMAC-SHA256`, firma de tokens `Bearer` JWT (`HS256`) y auditoría/revocación de tokens (`jti`).
+
 ---
 
 ## 📂 Estructura del Proyecto
@@ -48,10 +55,17 @@ Aplicación en Python diseñada para instructores, coordinadores académicos y c
 analisisraps/
 ├── data/
 │   └── muestra_sena_juicios_evaluativos.xlsx  # Archivo de prueba SENA ADSO
+├── db/
+│   └── changelog/
+│       ├── db.changelog-master.xml            # Maestro de migraciones Liquibase
+│       └── changes/                           # Changesets SQL versionados (v1.0 - v1.3)
 ├── static/
-│   ├── index.html                             # Interfaz web moderna
+│   ├── index.html                             # Interfaz web moderna + Login JWT
 │   ├── styles.css                             # Estilos glassmorphism y paleta SENA
-│   └── app.js                                 # Lógica reactiva e interactiva
+│   └── app.js                                 # Lógica reactiva, JWT y pestaña Histórico
+├── auth.py                                    # Motor de autenticación JWT (HS256) y PBKDF2
+├── database.py                                # Repositorio SQLite y ejecutor Liquibase
+├── liquibase.properties                       # Configuración oficial de Liquibase
 ├── sena_processor.py                          # Motor de normalización y análisis
 ├── export_utils.py                            # Generador de reportes Excel
 ├── sample_data.py                             # Generador de datos sintéticos SENA

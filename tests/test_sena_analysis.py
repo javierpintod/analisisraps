@@ -1,10 +1,12 @@
 """
 Batería de Pruebas Automatizadas de Calidad (QA) para el Analizador de RAPs SENA.
-Ejecuta validaciones unitarias, de integración y de precisión matemática sobre datos reales.
+Ejecuta validaciones unitarias, de integración, base de datos histórica y migraciones Liquibase.
 """
 
+import copy
 import os
 import sys
+import tempfile
 import unittest
 import openpyxl
 
@@ -14,6 +16,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from sena_processor import clean_string, normalize_juicio, auto_detect_columns, SenaReader, SenaAnalyzer
 from export_utils import create_excel_report
 from sample_data import generate_sample_excel
+from database import LiquibaseRunner, SenaHistoryRepository
+from auth import AuthService, encode_jwt, decode_jwt
 
 
 class TestNormalizacion(unittest.TestCase):
@@ -163,6 +167,102 @@ class TestExportacionExcel(unittest.TestCase):
         self.assertIn("Semáforo de RAPs", sheet_names)
         self.assertIn("Seguimiento de Aprendices", sheet_names)
         self.assertIn("Matriz Aprendiz vs RAP", sheet_names)
+
+
+class TestLiquibaseYBaseDatosHistorica(unittest.TestCase):
+    """Pruebas de control de cambios Liquibase y persistencia histórica en SQLite."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.TemporaryDirectory()
+        self.test_db = os.path.join(self.tmp_dir.name, "test_historico.db")
+
+    def tearDown(self):
+        self.tmp_dir.cleanup()
+
+    def test_liquibase_migrations_and_rollback(self):
+        runner = LiquibaseRunner(db_path=self.test_db)
+        res = runner.update()
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["applied_count"], 10)
+
+        # Segunda ejecución debe ser idempotente (0 aplicados)
+        res2 = runner.update()
+        self.assertEqual(res2["applied_count"], 0)
+        self.assertEqual(res2["previously_executed"], 10)
+
+        # Verificar estado
+        st = runner.status()
+        self.assertTrue(st["up_to_date"])
+        self.assertEqual(st["executed_count"], 10)
+
+        # Probar rollback del último changeset y reaplicación
+        rb = runner.rollback(count=1)
+        self.assertEqual(rb["rolled_back_count"], 1)
+        st_after_rb = runner.status()
+        self.assertFalse(st_after_rb["up_to_date"])
+        self.assertEqual(st_after_rb["pending_count"], 1)
+
+        res3 = runner.update()
+        self.assertEqual(res3["applied_count"], 1)
+
+    def test_guardar_y_comparar_historico(self):
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "data", "muestra_sena_juicios_evaluativos.xlsx")
+        with open(sample_path, "rb") as f:
+            content = f.read()
+
+        analyzer = SenaAnalyzer(content, "muestra.xlsx")
+        analysis_1 = analyzer.run_analysis(filter_estados=["EN FORMACIÓN"])
+
+        repo = SenaHistoryRepository(db_path=self.test_db)
+        save_1 = repo.save_analysis(analysis_1, "corte_1.xlsx", file_bytes=content, observaciones="Corte 1")
+        self.assertTrue(save_1["saved"])
+        self.assertEqual(save_1["cambios_detectados"], 0)
+
+        # Simular segundo corte donde un aprendiz aprueba un RAP pendiente/deficiente
+        analysis_2 = copy.deepcopy(analysis_1)
+        analysis_2["kpis"]["porcentaje_avance_real"] = round(analysis_1["kpis"]["porcentaje_avance_real"] + 2.5, 2)
+        primera_fila = analysis_2["matriz"]["filas"][0]
+        primer_rap = analysis_2["matriz"]["raps"][0]
+        primera_fila["juicios"][primer_rap] = "A" if primera_fila["juicios"][primer_rap] != "A" else "D"
+
+        save_2 = repo.save_analysis(analysis_2, "corte_2.xlsx", observaciones="Corte 2")
+        self.assertTrue(save_2["saved"])
+        self.assertEqual(save_2["cambios_detectados"], 1)
+
+        hist = repo.list_history(ficha="2714589")
+        self.assertEqual(len(hist["items"]), 2)
+        self.assertEqual(hist["items"][0]["cambios_juicios_count"], 1)
+        self.assertAlmostEqual(hist["items"][0]["delta_avance"], 2.5, places=1)
+
+    def test_autenticacion_jwt_ciclo_completo(self):
+        auth = AuthService(db_path=self.test_db)
+
+        # 1. Login exitoso con usuario por defecto
+        res = auth.login("instructor", "sena2026")
+        self.assertIn("token", res)
+        self.assertEqual(res["user"]["username"], "instructor")
+        self.assertEqual(res["user"]["rol"], "INSTRUCTOR")
+
+        token = res["token"]
+        self.assertEqual(len(token.split(".")), 3)
+
+        # 2. Verificación del token JWT
+        claims = auth.verify_token(token)
+        self.assertEqual(claims["username"], "instructor")
+
+        # 3. Rechazo de contraseña incorrecta
+        with self.assertRaises(ValueError):
+            auth.login("instructor", "clave_erronea")
+
+        # 4. Rechazo de firma manipulada (tampering)
+        tampered = token[:-4] + "XXXX"
+        with self.assertRaises(ValueError):
+            auth.verify_token(tampered)
+
+        # 5. Revocación del token al cerrar sesión (logout)
+        self.assertTrue(auth.logout(token))
+        with self.assertRaises(ValueError):
+            auth.verify_token(token)
 
 
 if __name__ == "__main__":
