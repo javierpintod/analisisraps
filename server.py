@@ -1,8 +1,8 @@
 """
 Servidor HTTP y API REST en Python puro para la aplicación SENA Análisis RAPs.
 Incluye autenticación JWT (RFC 7519 HS256), autorización RBAC, bitácora de auditoría
-encadenada, almacenamiento fila a fila de los archivos Excel, persistencia histórica
-en SQLite y control de migraciones de esquema con Liquibase.
+encadenada, almacenamiento fila a fila de los archivos Excel, envío de alertas por correo
+a aprendices críticos, persistencia histórica en SQLite y migraciones Liquibase.
 """
 
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -20,6 +20,7 @@ from sample_data import generate_sample_excel
 from database import SenaHistoryRepository
 from security import SecurityService
 from excel_records import ExcelRecordRepository
+from email_service import EmailNotificationService
 from auth import AuthService
 
 PORT = 8501
@@ -28,10 +29,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.realpath(os.path.join(BASE_DIR, "static"))
 MAX_BODY_BYTES = 25 * 1024 * 1024  # 25 MB (archivo Excel codificado en base64)
 
-# Inicializar Repositorios + Migraciones Liquibase + Seguridad + JWT
+# Inicializar Repositorios + Migraciones Liquibase + Seguridad + Correo + JWT
 HISTORY_REPO = SenaHistoryRepository()
 SECURITY = SecurityService()
 RECORDS_REPO = ExcelRecordRepository()
+EMAIL_SERVICE = EmailNotificationService()
 AUTH_SERVICE = AuthService(security=SECURITY)
 
 SYSTEM_CLAIMS = {"sub": None, "username": "sistema", "rol": "SISTEMA", "nombre": "Proceso automático"}
@@ -62,7 +64,9 @@ def preload_default_sample():
         SESSION_DATA["file_bytes"] = content
         SESSION_DATA["filename"] = target_name
         analyzer = SenaAnalyzer(content, target_name)
-        analysis = analyzer.run_analysis(filter_estados=["EN FORMACION"])
+        analysis = EMAIL_SERVICE.enrich_analysis_with_emails(
+            analyzer.run_analysis(filter_estados=["EN FORMACION"])
+        )
         SESSION_DATA["last_analysis"] = analysis
         hist = HISTORY_REPO.save_analysis(
             analysis,
@@ -92,9 +96,6 @@ class SenaApiHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         sys.stderr.write("%s - - [%s] %s\n" % (self.address_string(), self.log_date_time_string(), format % args))
 
-    # ------------------------------------------------------------------
-    # Utilidades de respuesta con cabeceras de seguridad
-    # ------------------------------------------------------------------
     def _security_headers(self, is_api: bool = True):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -126,15 +127,8 @@ class SenaApiHandler(BaseHTTPRequestHandler):
     def _client_ip(self) -> str:
         return self.client_address[0] if self.client_address else ""
 
-    # ------------------------------------------------------------------
-    # Autenticación (JWT) + Autorización (RBAC)
-    # ------------------------------------------------------------------
     def _require_auth(self, query_params: Optional[Dict[str, list]] = None,
                       permiso: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """
-        Valida el token JWT ('Authorization: Bearer <token>' o '?token=<jwt>') y, si se indica,
-        que el rol del usuario tenga el permiso requerido. Responde 401/403 y retorna None si falla.
-        """
         auth_header = self.headers.get("Authorization")
         query_token = None
         if query_params and query_params.get("token"):
@@ -207,6 +201,33 @@ class SenaApiHandler(BaseHTTPRequestHandler):
             })
             return
 
+        elif path == "/api/notificaciones":
+            claims = self._require_auth(query, "notificaciones.enviar")
+            if not claims:
+                return
+            ficha_f = q("ficha")
+            items = EMAIL_SERVICE.list_notifications(ficha=ficha_f)
+            smtp_cfg = EMAIL_SERVICE.get_smtp_config(include_password=False)
+            self._send_json(200, {
+                "success": True,
+                "notificaciones": items,
+                "smtp": smtp_cfg
+            })
+            return
+
+        elif path.startswith("/api/notificaciones/"):
+            claims = self._require_auth(query, "notificaciones.enviar")
+            if not claims:
+                return
+            id_part = path.split("/api/notificaciones/")[-1].strip("/")
+            if id_part.isdigit():
+                notif = EMAIL_SERVICE.get_notification(int(id_part))
+                if not notif:
+                    self._send_json(404, {"success": False, "error": "Notificación no encontrada."})
+                    return
+                self._send_json(200, {"success": True, "notificacion": notif})
+                return
+
         elif path == "/api/history":
             claims = self._require_auth(query, "historico.ver")
             if not claims:
@@ -225,6 +246,7 @@ class SenaApiHandler(BaseHTTPRequestHandler):
                 if not snap:
                     self._send_json(404, {"success": False, "error": "Corte histórico no encontrado."})
                     return
+                snap["analysis"] = EMAIL_SERVICE.enrich_analysis_with_emails(snap["analysis"])
                 SESSION_DATA["last_analysis"] = snap["analysis"]
                 SESSION_DATA["filename"] = snap["snapshot"]["archivo_origen"]
                 self._send_json(200, {"success": True, **snap})
@@ -316,7 +338,9 @@ class SenaApiHandler(BaseHTTPRequestHandler):
             analyzer = SenaAnalyzer(content, target_name)
             states = analyzer.get_unique_states()
             initial_filters = [s for s in states if "FORMACI" in s] or None
-            analysis = analyzer.run_analysis(filter_estados=initial_filters)
+            analysis = EMAIL_SERVICE.enrich_analysis_with_emails(
+                analyzer.run_analysis(filter_estados=initial_filters)
+            )
             SESSION_DATA["last_analysis"] = analysis
 
             hist_info = HISTORY_REPO.save_analysis(
@@ -363,7 +387,7 @@ class SenaApiHandler(BaseHTTPRequestHandler):
             self._send_json(404, {"success": False, "error": "Endpoint no encontrado."})
             return
 
-        # Servir archivos estáticos del frontend (protegido contra path traversal)
+        # Servir archivos estáticos del frontend
         if path == "/":
             path = "/index.html"
 
@@ -439,6 +463,7 @@ class SenaApiHandler(BaseHTTPRequestHandler):
                     sys.stderr.write(f"[Info] Filtro inicial '{initial_filters}' no aplicable: {e_filter}. Analizando todos los estados.\n")
                     analysis = analyzer.run_analysis(filter_estados=None)
 
+                analysis = EMAIL_SERVICE.enrich_analysis_with_emails(analysis)
                 SESSION_DATA["last_analysis"] = analysis
 
                 hist_info = HISTORY_REPO.save_analysis(
@@ -493,13 +518,89 @@ class SenaApiHandler(BaseHTTPRequestHandler):
                     SESSION_DATA["filename"],
                     custom_mapping=payload.get("mapping")
                 )
-                analysis = analyzer.run_analysis(
-                    filter_estados=payload.get("filter_estados"),
-                    umbral_verde=float(payload.get("umbral_verde", 80.0)),
-                    umbral_amarillo=float(payload.get("umbral_amarillo", 50.0))
+                analysis = EMAIL_SERVICE.enrich_analysis_with_emails(
+                    analyzer.run_analysis(
+                        filter_estados=payload.get("filter_estados"),
+                        umbral_verde=float(payload.get("umbral_verde", 80.0)),
+                        umbral_amarillo=float(payload.get("umbral_amarillo", 50.0))
+                    )
                 )
                 SESSION_DATA["last_analysis"] = analysis
                 self._send_json(200, {"success": True, "analysis": analysis})
+            except Exception as e:
+                self._send_json(400, {"success": False, "error": str(e)})
+            return
+
+        elif path == "/api/notificaciones/enviar":
+            claims = self._require_auth(query, "notificaciones.enviar")
+            if not claims:
+                return
+            try:
+                if not SESSION_DATA["last_analysis"]:
+                    raise ValueError("No hay ningún análisis cargado para enviar alertas.")
+                payload = json.loads(post_data.decode("utf-8"))
+                documentos = payload.get("documentos")
+                criterio = payload.get("criterio", "criticos")
+                custom_emails = payload.get("custom_emails") or {}
+                custom_note = payload.get("observacion", "")
+
+                res = EMAIL_SERVICE.send_alerts_to_critical(
+                    SESSION_DATA["last_analysis"],
+                    documentos=documentos,
+                    criterio=criterio,
+                    custom_emails=custom_emails,
+                    custom_note=custom_note,
+                    usuario=_user_label(claims)
+                )
+                SECURITY.log_from_claims(
+                    claims,
+                    "ENVIO_CORREO_CRITICOS",
+                    recurso=f"Ficha {SESSION_DATA['last_analysis']['meta']['ficha']}",
+                    resultado="OK" if res["total_errores"] == 0 else "PARCIAL",
+                    detalle={
+                        "criterio": criterio,
+                        "total_enviados": res["total_enviados"],
+                        "total_errores": res["total_errores"],
+                        "modo_envio": res["modo_envio"]
+                    },
+                    ip=ip
+                )
+                self._send_json(200, {"success": True, **res})
+            except Exception as e:
+                self._send_json(400, {"success": False, "error": str(e)})
+            return
+
+        elif path == "/api/notificaciones/contacto":
+            claims = self._require_auth(query, "notificaciones.enviar")
+            if not claims:
+                return
+            try:
+                payload = json.loads(post_data.decode("utf-8"))
+                ficha = SESSION_DATA["last_analysis"]["meta"]["ficha"] if SESSION_DATA["last_analysis"] else ""
+                saved = EMAIL_SERVICE.upsert_contact(
+                    documento=payload.get("documento", ""),
+                    nombre=payload.get("nombre", ""),
+                    correo=payload.get("correo", ""),
+                    ficha=ficha,
+                    usuario=_user_label(claims)
+                )
+                if SESSION_DATA["last_analysis"]:
+                    EMAIL_SERVICE.enrich_analysis_with_emails(SESSION_DATA["last_analysis"])
+                self._send_json(200, {"success": True, "contacto": saved})
+            except Exception as e:
+                self._send_json(400, {"success": False, "error": str(e)})
+            return
+
+        elif path == "/api/notificaciones/smtp":
+            claims = self._require_auth(query, "notificaciones.configurar")
+            if not claims:
+                return
+            try:
+                payload = json.loads(post_data.decode("utf-8"))
+                cfg = EMAIL_SERVICE.save_smtp_config(payload)
+                SECURITY.log_from_claims(claims, "CONFIGURAR_SMTP", recurso="configuracion_smtp",
+                                         detalle={"modo_envio": cfg["modo_envio"], "smtp_host": cfg["smtp_host"]}, ip=ip)
+                self._send_json(200, {"success": True, "smtp": cfg})
             except Exception as e:
                 self._send_json(400, {"success": False, "error": str(e)})
             return
@@ -573,7 +674,7 @@ def start_server(port=PORT):
     print(f"  SENA - SISTEMA DE ANÁLISIS DE AVANCE POR RAPS")
     print(f"=======================================================")
     print(f"  Aplicación iniciada en: {url}")
-    print(f"  JWT (HS256) + RBAC + Auditoría encadenada + Liquibase activos.")
+    print(f"  JWT (HS256) + RBAC + Auditoría + Notificaciones Correo activos.")
     print(f"  Presiona Ctrl+C para detener el servidor.\n")
     try:
         httpd.serve_forever()

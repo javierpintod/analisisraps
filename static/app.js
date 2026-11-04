@@ -474,11 +474,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
         document.getElementById("tab-count-raps").textContent = analysis.raps.length;
         document.getElementById("tab-count-apr").textContent = analysis.aprendices.length;
+        const tabCountCrit = document.getElementById("tab-count-crit");
+        if (tabCountCrit) tabCountCrit.textContent = kpis.aprendices_riesgo;
 
         renderRapsList(analysis.raps);
         renderAprendicesTable(analysis.aprendices);
         renderCompetenciasGrid(analysis.competencias);
         renderMatrix(analysis.matriz);
+        renderCriticosEmailTable();
     }
 
     // -------------------------------------------------------------
@@ -571,7 +574,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
         if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; color: var(--text-muted); padding: 2rem;">No se encontraron aprendices con ese criterio de búsqueda.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="10" style="text-align: center; color: var(--text-muted); padding: 2rem;">No se encontraron aprendices con ese criterio de búsqueda.</td></tr>`;
             return;
         }
 
@@ -580,10 +583,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const fillClass = a.situacion_cod === "al_dia" ? "fill-green" : (a.situacion_cod === "observacion" ? "fill-amber" : "fill-red");
             const badgeClass = a.situacion_cod === "al_dia" ? "status-optimo" : (a.situacion_cod === "observacion" ? "status-avance" : "status-critico");
+            const isCritico = a.situacion_cod === "riesgo" || a.raps_deficientes > 0;
 
             tr.innerHTML = `
                 <td class="apr-name-col">${escapeHtml(a.nombre)}</td>
                 <td>${escapeHtml(a.documento)}</td>
+                <td style="font-size: 0.78rem; color: #93C5FD;">${escapeHtml(a.correo || '-')}</td>
                 <td><span style="font-size: 0.75rem; padding: 0.15rem 0.5rem; border-radius: 4px; background: rgba(255,255,255,0.06);">${escapeHtml(a.estado_sofia)}</span></td>
                 <td style="color: var(--color-green); font-weight: 600;">${a.raps_aprobados}</td>
                 <td style="color: ${a.raps_deficientes > 0 ? 'var(--color-red)' : 'var(--text-muted)'}; font-weight: 600;">${a.raps_deficientes}</td>
@@ -598,17 +603,29 @@ document.addEventListener("DOMContentLoaded", () => {
                 </td>
                 <td><span class="status-badge ${badgeClass}" style="display: inline-block;">${a.situacion}</span></td>
                 <td>
-                    <button class="btn-details" data-doc="${a.documento}">Ver Faltantes</button>
+                    <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                        <button class="btn-details btn-view-apr" data-doc="${a.documento}">Ver Faltantes</button>
+                        ${isCritico && can("notificaciones.enviar") ? `<button class="btn-details btn-alert-apr" data-doc="${a.documento}" style="border-color: rgba(239,68,68,0.45); color: #FCA5A5;">📧 Alertar</button>` : ""}
+                    </div>
                 </td>
             `;
             tbody.appendChild(tr);
         });
 
-        tbody.querySelectorAll(".btn-details").forEach(btn => {
+        tbody.querySelectorAll(".btn-view-apr").forEach(btn => {
             btn.addEventListener("click", () => {
                 const doc = btn.dataset.doc;
                 const apr = currentAnalysis.aprendices.find(x => x.documento === doc);
                 if (apr) openAprendizModal(apr);
+            });
+        });
+
+        tbody.querySelectorAll(".btn-alert-apr").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const doc = btn.dataset.doc;
+                const apr = currentAnalysis.aprendices.find(x => x.documento === doc);
+                if (!apr) return;
+                await sendAlertForLearners([doc]);
             });
         });
     }
@@ -668,7 +685,38 @@ document.addEventListener("DOMContentLoaded", () => {
             `;
         }
 
+        if (can("notificaciones.enviar")) {
+            const subjectEnc = encodeURIComponent(`[SENA - Ficha ${currentAnalysis ? currentAnalysis.meta.ficha : ''}] Citación Plan de Mejoramiento - ${apr.nombre}`);
+            const bodyEnc = encodeURIComponent(
+                `Cordial saludo ${apr.nombre},\n\n` +
+                `Se le notifica estado académico (${apr.situacion}) con ${apr.porcentaje_avance}% de avance y ${apr.raps_deficientes} RAP(s) Deficiente(s).\n` +
+                `Por favor concertar Plan de Mejoramiento Académico.\n\nInstructor SENA`
+            );
+            html += `
+                <div style="margin-top: 1.5rem; padding: 1rem; border-radius: 8px; background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.3);">
+                    <div class="modal-section-title" style="color: #FCA5A5; margin-top: 0;">📧 Notificación por Correo Electrónico al Aprendiz</div>
+                    <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center;">
+                        <input type="email" id="modal-apr-email-input" value="${escapeHtml(apr.correo || '')}" class="search-input" style="flex: 1; min-width: 220px;" placeholder="correo@soy.sena.edu.co">
+                        <button type="button" id="btn-modal-send-email" class="btn btn-primary" style="background: linear-gradient(135deg, #EF4444, #B91C1C);">📧 Enviar Alerta Oficial</button>
+                        <a href="mailto:${encodeURIComponent(apr.correo || '')}?subject=${subjectEnc}&body=${bodyEnc}" class="btn btn-outline" style="text-decoration: none; font-size: 0.8rem;">✉️ Abrir en Cliente Correo</a>
+                    </div>
+                </div>
+            `;
+        }
+
         modalAprContent.innerHTML = html;
+        const btnModalSend = document.getElementById("btn-modal-send-email");
+        if (btnModalSend) {
+            btnModalSend.addEventListener("click", async () => {
+                const emailInput = document.getElementById("modal-apr-email-input");
+                const newEmail = emailInput ? emailInput.value.trim() : apr.correo;
+                if (newEmail) {
+                    apr.correo = newEmail;
+                }
+                await sendAlertForLearners([apr.documento], { [apr.documento]: newEmail });
+                modalBackdrop.style.display = "none";
+            });
+        }
         modalBackdrop.style.display = "flex";
     }
 
@@ -1170,6 +1218,301 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("aud-f-evento").addEventListener("change", loadAuditoria);
 
     // -------------------------------------------------------------
+    // PESTAÑA 8: NOTIFICACIONES POR CORREO A APRENDICES CRÍTICOS
+    // -------------------------------------------------------------
+    function getFilteredCriticosForEmail() {
+        if (!currentAnalysis || !currentAnalysis.aprendices) return [];
+        const sel = document.getElementById("notif-criterio");
+        const criterio = sel ? sel.value : "criticos";
+        return currentAnalysis.aprendices.filter(a => {
+            if (criterio === "criticos") return a.situacion_cod === "riesgo";
+            if (criterio === "con_deficientes") return a.raps_deficientes > 0;
+            if (criterio === "riesgo_y_observacion") return a.situacion_cod === "riesgo" || a.situacion_cod === "observacion";
+            return a.situacion_cod === "riesgo";
+        });
+    }
+
+    function renderCriticosEmailTable() {
+        const tbody = document.getElementById("tbody-criticos-email");
+        if (!tbody) return;
+        const criticos = getFilteredCriticosForEmail();
+        if (!criticos.length) {
+            tbody.innerHTML = `<tr><td colspan="8" style="text-align:center; padding: 1.8rem; color: var(--text-muted);">No hay aprendices que coincidan con el criterio de criticidad seleccionado.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = criticos.map(a => {
+            const badgeClass = a.situacion_cod === "al_dia" ? "status-optimo" : (a.situacion_cod === "observacion" ? "status-avance" : "status-critico");
+            const subjectEnc = encodeURIComponent(`[SENA - Ficha ${currentAnalysis ? currentAnalysis.meta.ficha : ''}] Citación Plan de Mejoramiento - ${a.nombre}`);
+            const bodyEnc = encodeURIComponent(
+                `Cordial saludo ${a.nombre},\n\n` +
+                `Se le notifica estado académico (${a.situacion}) con ${a.porcentaje_avance}% de avance y ${a.raps_deficientes} RAP(s) Deficiente(s).\n` +
+                `Por favor concertar Plan de Mejoramiento Académico.\n\nInstructor SENA`
+            );
+            return `
+                <tr>
+                    <td><input type="checkbox" class="chk-crit-doc" data-doc="${escapeHtml(a.documento)}" checked></td>
+                    <td class="apr-name-col">${escapeHtml(a.nombre)}</td>
+                    <td>${escapeHtml(a.documento)}</td>
+                    <td>
+                        <input type="email" class="search-input input-crit-email" data-doc="${escapeHtml(a.documento)}" value="${escapeHtml(a.correo || '')}" style="width: 100%; min-width: 210px; padding: 0.35rem 0.6rem; font-size: 0.8rem;">
+                    </td>
+                    <td style="color: ${a.raps_deficientes > 0 ? 'var(--color-red)' : 'var(--text-muted)'}; font-weight: 700;">${a.raps_deficientes} D / ${a.raps_pendientes} P</td>
+                    <td style="font-weight: 600;">${a.porcentaje_avance}%</td>
+                    <td><span class="status-badge ${badgeClass}">${escapeHtml(a.situacion)}</span></td>
+                    <td>
+                        <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                            <button type="button" class="btn-details btn-send-single-crit" data-doc="${escapeHtml(a.documento)}" style="border-color: rgba(239,68,68,0.5); color: #FCA5A5;">📧 Enviar</button>
+                            <a href="mailto:${encodeURIComponent(a.correo || '')}?subject=${subjectEnc}&body=${bodyEnc}" class="btn-details" style="text-decoration: none;" title="Abrir en cliente de correo local">✉️ Mailto</a>
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }).join("");
+
+        tbody.querySelectorAll(".input-crit-email").forEach(inp => {
+            inp.addEventListener("change", async () => {
+                const doc = inp.dataset.doc;
+                const email = inp.value.trim();
+                if (!email) return;
+                const apr = currentAnalysis.aprendices.find(x => x.documento === doc);
+                if (apr) apr.correo = email;
+                try {
+                    await apiFetch("/api/notificaciones/contacto", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            documento: doc,
+                            nombre: apr ? apr.nombre : "",
+                            correo: email,
+                            ficha_codigo: currentAnalysis ? currentAnalysis.meta.ficha : ""
+                        })
+                    });
+                    renderAprendicesTable(currentAnalysis.aprendices);
+                    showToast(`Correo actualizado para documento ${doc}`);
+                } catch (e) {
+                    showToast(e.message, true);
+                }
+            });
+        });
+
+        tbody.querySelectorAll(".btn-send-single-crit").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                const doc = btn.dataset.doc;
+                const emailInp = tbody.querySelector(`.input-crit-email[data-doc="${doc}"]`);
+                const customMap = {};
+                if (emailInp && emailInp.value.trim()) {
+                    customMap[doc] = emailInp.value.trim();
+                }
+                await sendAlertForLearners([doc], customMap);
+            });
+        });
+    }
+
+    async function sendAlertForLearners(documentos, customEmailsMap = null) {
+        if (!currentAnalysis) return;
+        const criterioEl = document.getElementById("notif-criterio");
+        const obsEl = document.getElementById("notif-observacion");
+        const criterio = criterioEl ? criterioEl.value : "criticos";
+        const observacion_instructor = obsEl ? obsEl.value.trim() : "";
+
+        const correos_personalizados = Object.assign({}, customEmailsMap || {});
+        document.querySelectorAll(".input-crit-email").forEach(inp => {
+            if (inp.value.trim()) {
+                correos_personalizados[inp.dataset.doc] = inp.value.trim();
+            }
+        });
+
+        showToast(`Enviando notificación por correo a ${documentos ? documentos.length : 'los'} aprendiz(ces)...`);
+        try {
+            const res = await apiFetch("/api/notificaciones/enviar", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    criterio,
+                    documentos,
+                    correos_personalizados,
+                    observacion_instructor
+                })
+            });
+            const data = await res.json();
+            if (!data.success) throw new Error(data.error || "Error al enviar correos");
+
+            // Actualizar correos en currentAnalysis si se personalizaron
+            Object.entries(correos_personalizados).forEach(([doc, mail]) => {
+                const apr = currentAnalysis.aprendices.find(x => x.documento === doc);
+                if (apr) apr.correo = mail;
+            });
+            renderAprendicesTable(currentAnalysis.aprendices);
+            await loadNotificacionesData();
+
+            const modoTxt = data.modo_envio === "SMTP" ? "vía servidor SMTP" : "en Bandeja de Salida Local (.eml + SQLite)";
+            showToast(`✅ ${data.total_enviados} correo(s) enviados ${modoTxt}`);
+        } catch (err) {
+            showToast(err.message, true);
+        }
+    }
+
+    async function loadNotificacionesData() {
+        try {
+            const res = await apiFetch("/api/notificaciones");
+            const data = await res.json();
+            if (!data.success) return;
+
+            const cfg = data.smtp_config;
+            if (cfg) {
+                const badge = document.getElementById("smtp-mode-badge");
+                if (badge) {
+                    if (cfg.modo_envio === "SMTP") {
+                        badge.className = "status-badge status-optimo";
+                        badge.textContent = `🟢 Modo: SMTP Real (${cfg.smtp_host}:${cfg.smtp_port})`;
+                    } else {
+                        badge.className = "status-badge status-avance";
+                        badge.textContent = `🟡 Modo: Simulado Local (data/outbox/*.eml + SQLite)`;
+                    }
+                }
+                const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ""; };
+                setVal("smtp-modo", cfg.modo_envio || "SIMULADO_LOCAL");
+                setVal("smtp-host", cfg.smtp_host || "smtp.gmail.com");
+                setVal("smtp-port", cfg.smtp_port || 587);
+                setVal("smtp-user", cfg.smtp_user || "");
+                setVal("smtp-remitente-nombre", cfg.remitente_nombre || "");
+                setVal("smtp-remitente-correo", cfg.remitente_correo || "");
+                setVal("smtp-cc", cfg.cc_coordinacion || "");
+            }
+
+            const tbody = document.getElementById("tbody-notificaciones-historial");
+            if (!tbody) return;
+            if (!data.items || !data.items.length) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding: 1.5rem; color: var(--text-muted);">Aún no se han enviado notificaciones por correo electrónico.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = data.items.map(n => {
+                const stClass = n.estado_envio === "ENVIADO_SMTP" ? "status-optimo" : (n.estado_envio === "ERROR" ? "status-critico" : "status-avance");
+                return `
+                    <tr>
+                        <td style="font-weight: 700;">#${n.id}</td>
+                        <td style="font-size: 0.78rem;">${escapeHtml(n.fecha_envio)}</td>
+                        <td>${escapeHtml(n.ficha_codigo)}</td>
+                        <td class="apr-name-col">${escapeHtml(n.nombre_aprendiz)} <span style="font-size:0.75rem; color:var(--text-muted);">(${escapeHtml(n.documento)})</span></td>
+                        <td style="color: #93C5FD; font-size: 0.8rem;">${escapeHtml(n.correo_destino)}</td>
+                        <td style="font-weight: 600;">${n.raps_deficientes} D / ${n.porcentaje_avance}%</td>
+                        <td><span class="status-badge ${stClass}">${escapeHtml(n.estado_envio)}</span></td>
+                        <td style="font-size: 0.78rem;">${escapeHtml(n.enviado_por)}</td>
+                        <td>
+                            <button type="button" class="btn-details btn-view-email-html" data-id="${n.id}">👁️ Ver Correo</button>
+                        </td>
+                    </tr>
+                `;
+            }).join("");
+
+            tbody.querySelectorAll(".btn-view-email-html").forEach(btn => {
+                btn.addEventListener("click", async () => {
+                    try {
+                        const r = await apiFetch(`/api/notificaciones/${btn.dataset.id}`);
+                        const d = await r.json();
+                        if (!d.success) throw new Error(d.error);
+                        const notif = d.notificacion;
+                        modalAprName.textContent = `📧 ${notif.asunto}`;
+                        modalAprDoc.textContent = `Para: ${notif.correo_destino}  |  Fecha: ${notif.fecha_envio}  |  Estado: ${notif.estado_envio}${notif.archivo_eml ? ` (${notif.archivo_eml})` : ''}`;
+                        modalAprContent.innerHTML = `
+                            <div style="background: #ffffff; border-radius: 8px; padding: 0.5rem; overflow: auto; max-height: 60vh;">
+                                ${notif.cuerpo_html}
+                            </div>
+                        `;
+                        modalBackdrop.style.display = "flex";
+                    } catch (e) {
+                        showToast(e.message, true);
+                    }
+                });
+            });
+        } catch (err) {
+            console.error("Error cargando notificaciones:", err);
+        }
+    }
+
+    const btnGoEmailCriticos = document.getElementById("btn-go-email-criticos");
+    if (btnGoEmailCriticos) {
+        btnGoEmailCriticos.addEventListener("click", () => {
+            const tabBtn = document.querySelector(`.tab-btn[data-tab="tab-notificaciones"]`);
+            if (tabBtn) tabBtn.click();
+        });
+    }
+
+    const notifCriterio = document.getElementById("notif-criterio");
+    if (notifCriterio) {
+        notifCriterio.addEventListener("change", renderCriticosEmailTable);
+    }
+
+    const chkAllCriticos = document.getElementById("chk-all-criticos");
+    if (chkAllCriticos) {
+        chkAllCriticos.addEventListener("change", () => {
+            document.querySelectorAll(".chk-crit-doc").forEach(chk => {
+                chk.checked = chkAllCriticos.checked;
+            });
+        });
+    }
+
+    const btnSendBulkEmails = document.getElementById("btn-send-bulk-emails");
+    if (btnSendBulkEmails) {
+        btnSendBulkEmails.addEventListener("click", async () => {
+            const selectedDocs = Array.from(document.querySelectorAll(".chk-crit-doc:checked")).map(c => c.dataset.doc);
+            if (!selectedDocs.length) {
+                showToast("Selecciona al menos un aprendiz en estado crítico para enviar el correo", true);
+                return;
+            }
+            await sendAlertForLearners(selectedDocs);
+        });
+    }
+
+    const btnToggleSmtp = document.getElementById("btn-toggle-smtp");
+    if (btnToggleSmtp) {
+        btnToggleSmtp.addEventListener("click", () => {
+            const panel = document.getElementById("smtp-config-panel");
+            if (panel) {
+                panel.style.display = panel.style.display === "none" ? "block" : "none";
+            }
+        });
+    }
+
+    const btnSaveSmtp = document.getElementById("btn-save-smtp");
+    if (btnSaveSmtp) {
+        btnSaveSmtp.addEventListener("click", async () => {
+            try {
+                const payload = {
+                    modo_envio: document.getElementById("smtp-modo").value,
+                    smtp_host: document.getElementById("smtp-host").value.trim(),
+                    smtp_port: parseInt(document.getElementById("smtp-port").value, 10) || 587,
+                    smtp_user: document.getElementById("smtp-user").value.trim(),
+                    smtp_password: document.getElementById("smtp-password").value,
+                    remitente_nombre: document.getElementById("smtp-remitente-nombre").value.trim(),
+                    remitente_correo: document.getElementById("smtp-remitente-correo").value.trim(),
+                    cc_coordinacion: document.getElementById("smtp-cc").value.trim(),
+                    usar_tls: true
+                };
+                const res = await apiFetch("/api/notificaciones/smtp", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.error);
+                document.getElementById("smtp-password").value = "";
+                await loadNotificacionesData();
+                showToast("Configuración de correo electrónico guardada en SQLite");
+            } catch (e) {
+                showToast(e.message, true);
+            }
+        });
+    }
+
+    const btnRefreshNotif = document.getElementById("btn-refresh-notificaciones");
+    if (btnRefreshNotif) {
+        btnRefreshNotif.addEventListener("click", loadNotificacionesData);
+    }
+
+    // -------------------------------------------------------------
     // CONTROL DE PESTAÑAS (TABS)
     // -------------------------------------------------------------
     document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -1189,6 +1532,9 @@ document.addEventListener("DOMContentLoaded", () => {
                 loadRegistros(1);
             } else if (tabId === "tab-seguridad") {
                 loadAuditoria();
+            } else if (tabId === "tab-notificaciones") {
+                renderCriticosEmailTable();
+                loadNotificacionesData();
             }
         });
     });
