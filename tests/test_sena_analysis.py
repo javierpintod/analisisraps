@@ -22,6 +22,7 @@ from database import LiquibaseRunner, SenaHistoryRepository
 from auth import AuthService
 from security import SecurityService
 from excel_records import ExcelRecordRepository
+from email_service import EmailNotificationService
 
 
 class TestNormalizacion(unittest.TestCase):
@@ -187,17 +188,17 @@ class TestLiquibaseYBaseDatosHistorica(unittest.TestCase):
         runner = LiquibaseRunner(db_path=self.test_db)
         res = runner.update()
         self.assertEqual(res["status"], "success")
-        self.assertEqual(res["applied_count"], 16)
+        self.assertEqual(res["applied_count"], 20)
 
         # Segunda ejecución debe ser idempotente (0 aplicados)
         res2 = runner.update()
         self.assertEqual(res2["applied_count"], 0)
-        self.assertEqual(res2["previously_executed"], 16)
+        self.assertEqual(res2["previously_executed"], 20)
 
         # Verificar estado
         st = runner.status()
         self.assertTrue(st["up_to_date"])
-        self.assertEqual(st["executed_count"], 16)
+        self.assertEqual(st["executed_count"], 20)
 
         # Probar rollback del último changeset y reaplicación
         rb = runner.rollback(count=1)
@@ -314,6 +315,37 @@ class TestLiquibaseYBaseDatosHistorica(unittest.TestCase):
         integ = rec_repo.verify_integrity(store_res["carga_id"])
         self.assertTrue(integ["integro"])
         self.assertEqual(integ["total_encontrado"], 250)
+
+    def test_envio_correo_aprendices_criticos(self):
+        sample_path = os.path.join(os.path.dirname(__file__), "..", "data", "muestra_sena_juicios_evaluativos.xlsx")
+        with open(sample_path, "rb") as f:
+            content = f.read()
+
+        analyzer = SenaAnalyzer(content, "muestra.xlsx")
+        analysis = analyzer.run_analysis(filter_estados=["EN FORMACIÓN"])
+
+        email_srv = EmailNotificationService(db_path=self.test_db)
+        email_srv.enrich_analysis_with_emails(analysis)
+
+        # Verificar que todos los aprendices recibieron correo institucional por defecto
+        for apr in analysis["aprendices"]:
+            self.assertIn("@", apr.get("correo", ""))
+
+        # Enviar correo a aprendices en estado crítico
+        send_res = email_srv.send_alerts_to_critical(
+            analysis,
+            criterio="criticos",
+            custom_note="Favor asistir a sesión de plan de mejoramiento.",
+            usuario="instructor"
+        )
+        self.assertGreater(send_res["total_enviados"], 0)
+        self.assertEqual(send_res["total_errores"], 0)
+
+        # Verificar que quedaron registrados en el historial de notificaciones SQLite
+        hist = email_srv.list_notifications(ficha="2714589")
+        self.assertEqual(len(hist), send_res["total_enviados"])
+        detalle = email_srv.get_notification(hist[0]["id"])
+        self.assertIn("Plan de Mejoramiento", detalle["cuerpo_html"])
 
 
 if __name__ == "__main__":

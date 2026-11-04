@@ -15,5 +15,6 @@
     <include file="db/changelog/changes/004-auth-users-jwt.sql" relativeToChangelogFile="false"/>
     <include file="db/changelog/changes/005-security-framework.sql" relativeToChangelogFile="false"/>
     <include file="db/changelog/changes/006-excel-records.sql" relativeToChangelogFile="false"/>
+    <include file="db/changelog/changes/007-email-notifications.sql" relativeToChangelogFile="false"/>
 
 </databaseChangeLog>
